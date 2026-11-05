@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.2.1
+  ChronoNote · 智能时间流记事与待办 v1.2.2
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；仅 deepseekApiKey / githubToken / gistId / lastIsoWeek 存 localStorage
@@ -304,6 +304,8 @@ img{display:block;max-width:100%}
 .tp-add button{width:30px;height:30px;border-radius:8px;background:var(--indigo);color:#fff;display:grid;place-items:center;flex:0 0 auto;transition:.15s}
 .tp-add button:disabled{background:#E2E8F0;color:#94A3B8;cursor:not-allowed}
 .tp-add button:not(:disabled):hover{background:var(--indigo-600)}
+.tp-thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.tp-thumb{width:46px;height:46px;border-radius:8px}
 
 /* 日期分组 */
 .daygroup{margin-bottom:24px}
@@ -750,10 +752,17 @@ img{display:block;max-width:100%}
           <span v-else class="tp-ok">无逾期</span>
         </div>
         <div class="tp-add">
-          <input v-model="S.todayDraft" @keydown.enter="A.addToday" placeholder="加到今天，回车即可…" aria-label="添加到今天">
-          <button @click="A.addToday" :disabled="!S.todayDraft.trim()" aria-label="添加">
+          <input v-model="S.todayDraft" @keydown.enter="A.addToday" @paste="A.onPasteToday"
+                 placeholder="加到今天（支持 // 备注，可粘贴图片）" aria-label="添加到今天">
+          <button @click="A.addToday" :disabled="!S.todayDraft.trim() && !S.todayImages.length" aria-label="添加">
             <icon name="plus" :size="12" :stroke="2.6"/>
           </button>
+        </div>
+        <div class="tp-thumbs" v-if="S.todayImages.length">
+          <div class="thumb tp-thumb" v-for="(src,i) in S.todayImages" :key="i">
+            <img :src="src" alt="待附图片">
+            <button class="thumb-del" @click="A.removeTodayImage(i)" aria-label="移除图片">×</button>
+          </div>
         </div>
       </div>
 
@@ -1900,11 +1909,14 @@ img{display:block;max-width:100%}
     name: 'TimeMenu',
     emits: ['pick'],
     setup: function (props, ctx) {
-      var custom = ref(false);
-      var date = ref(isoToday());
-      var time = ref('09:00');
+      var S = inject('S');
+      var pickTask = (S && S.picker && S.picker.task) ? S.picker.task : null;
       var today = isoToday();
       var tomorrow = ymd(addDays(new Date(), 1));
+      var custom = ref(false);
+      /* 回填当前任务的日期/时间：改同一天的另一个时刻不用重选日期 */
+      var date = ref(pickTask && pickTask.targetDate ? pickTask.targetDate : today);
+      var time = ref(pickTask && pickTask.targetTime ? pickTask.targetTime : '09:00');
       function emit(payload) { ctx.emit('pick', payload); }
       function applyCustom() {
         if (!custom.value) { custom.value = true; return; }
@@ -2165,6 +2177,7 @@ img{display:block;max-width:100%}
         isoWeek: isoWeekKey(new Date()),
         draft: '',
         todayDraft: '',
+        todayImages: [],
         draftImages: [],
         draftOverride: null,
         aiLoading: false,
@@ -2344,19 +2357,25 @@ img{display:block;max-width:100%}
         return changed;
       }
       function clearCompleted() {
-        var ids = [], now = Date.now();
+        var ids = [], now = Date.now(), snapshots = {};
         S.tasks.forEach(function (t) {
           if (t.completed && !t.deleted) {
             t.deleted = true;
             t.updatedAt = now;
             ids.push(t.id);
+            if (t.notes && t.notes.length) snapshots[t.id] = t.notes.slice();
           }
         });
         if (!ids.length) return;
         toast('已清空 ' + ids.length + ' 项已完成', false, '撤销', function () {
           var stamp = Date.now();
           S.tasks.forEach(function (t) {
-            if (ids.indexOf(t.id) >= 0) { t.deleted = false; t.updatedAt = stamp; }
+            if (ids.indexOf(t.id) >= 0) {
+              t.deleted = false;
+              /* 万一撤销与 6.5s 剥离撞在同一拍，用快照补回备注 */
+              if ((!t.notes || !t.notes.length) && snapshots[t.id]) t.notes = snapshots[t.id].slice();
+              t.updatedAt = stamp;
+            }
           });
         });
         /* 与单条删除一致：过了撤销期就把 Base64 从墓碑上摘掉 */
@@ -2496,7 +2515,7 @@ img{display:block;max-width:100%}
       /* 今日计划面板的快速添加：无时间的落到今天全天，其余尊重识别结果 */
       function addToday() {
         var raw = String(S.todayDraft || '').trim();
-        if (!raw) return;
+        if (!raw && !S.todayImages.length) return;
         var parsed = parseDraft(raw);
         var time = parsed.time;
         if (!time || time.timeType === 'nodate') {
@@ -2505,10 +2524,26 @@ img{display:block;max-width:100%}
         var notes = [];
         if (parsed.noteText) notes.push(makeTextNote(parsed.noteText));
         parsed.links.forEach(function (u) { var n = makeLinkNote(u); if (n) notes.push(n); });
-        var title = parsed.title || '未命名事项';
+        S.todayImages.forEach(function (src) { notes.push(makeImageNote(src)); });
+        var title = parsed.title || (notes.length ? '图片备忘' : '');
+        if (!title) return;
         S.tasks.push(makeTask(title, time, notes));
         S.todayDraft = '';
+        S.todayImages = [];
         toast('已添加「' + title.slice(0, 16) + '」');
+      }
+
+      function onPasteToday(e) {
+        var imgs = extractClipboardImages(e);
+        if (!imgs.length) return;
+        e.preventDefault();
+        ingestImages(imgs, function (list) {
+          S.todayImages = S.todayImages.concat(list.map(function (n) { return n.content; }));
+        });
+      }
+
+      function removeTodayImage(i) {
+        S.todayImages.splice(i, 1);
       }
 
       function removeDraftImage(i) {
@@ -3191,6 +3226,8 @@ img{display:block;max-width:100%}
         fillDraft: fillDraft,
         send: send,
         addToday: addToday,
+        onPasteToday: onPasteToday,
+        removeTodayImage: removeTodayImage,
         removeDraftImage: removeDraftImage,
         runAI: runAI,
         metaHint: metaHint,
@@ -3256,7 +3293,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.2.1', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.2.2', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
