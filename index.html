@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.2.2
+  ChronoNote · 智能时间流记事与待办 v1.4.0
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
-  · 存储：任务与图片 → IndexedDB (localforage)；仅 deepseekApiKey / githubToken / gistId / lastIsoWeek 存 localStorage
-  · 同步：GitHub Gist 双向增量合并，按 id 比对、updatedAt 取新、删除写成 deleted=true，避免跨端复活
+  · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
+  · 同步：GitHub Gist 按 id 合并，按 updatedAt / updatedBy / updateId 冲突排序；删除墓碑长期保留
   · 语法：` // ` 之后为子备注（含 URL 自动转为链接备注）；输入框内 Ctrl+V 可直接粘贴图片
 -->
 <html lang="zh-CN">
@@ -17,7 +17,7 @@
 <meta name="apple-mobile-web-app-title" content="ChronoNote">
 <meta name="theme-color" content="#F8FAFC">
 <meta name="format-detection" content="telephone=no">
-<meta name="description" content="ChronoNote · 智能时间流记事与待办，本地优先、双端无损同步。">
+<meta name="description" content="ChronoNote · 智能时间流记事与待办，本地优先、GitHub Gist 同步。">
 <title>ChronoNote · 智能时间流</title>
 
 <!-- ===== 依赖（全部 CDN，带备用源） ===== -->
@@ -692,6 +692,13 @@ img{display:block;max-width:100%}
     </div>
   </header>
 
+  <div class="banner-wrap" v-if="S.storageWarning" role="status">
+    <div class="banner">
+      <span class="b-ic"><icon name="alert" :size="15"/></span>
+      <div class="banner-text"><b>本地存储提醒：</b>{{ S.storageWarning }}</div>
+    </div>
+  </div>
+
   <!-- 跨周提醒 -->
   <transition name="fade">
     <div class="banner-wrap" v-if="S.banner.show">
@@ -879,7 +886,7 @@ img{display:block;max-width:100%}
         <div class="modal-head">
           <div>
             <div class="modal-title">设置</div>
-            <div class="modal-sub">数据只保存在本机，同步仅在你手动触发时发生</div>
+            <div class="modal-sub">数据优先保存在本机；配置 Gist 后，本机修改会在约 8 秒无操作后自动同步，也可手动触发。</div>
           </div>
           <button class="modal-close" @click="A.closeSettings" aria-label="关闭"><icon name="x" :size="14"/></button>
         </div>
@@ -896,7 +903,7 @@ img{display:block;max-width:100%}
                        placeholder="sk-…" autocomplete="off" spellcheck="false">
                 <button class="pw-toggle" @click="S.showKey=!S.showKey">{{ S.showKey ? '隐藏' : '显示' }}</button>
               </div>
-              <div class="help">在 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a> 创建，仅明文保存在本机 localStorage。</div>
+              <div class="help">在 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a> 创建，以明文保存在本机 localStorage；能运行本页脚本的第三方代码也可能读取，请勿在不可信设备上保存密钥。</div>
             </div>
           </div>
 
@@ -913,6 +920,7 @@ img{display:block;max-width:100%}
                        placeholder="ghp_…（需 gist 权限）" autocomplete="off" spellcheck="false">
                 <button class="pw-toggle" @click="S.showToken=!S.showToken">{{ S.showToken ? '隐藏' : '显示' }}</button>
               </div>
+              <div class="help">Token 以明文保存在本机 localStorage。建议仅授予 Gists 写入权限，并避免在不可信设备上保存。</div>
             </div>
             <div class="field">
               <label class="label">Gist ID</label>
@@ -940,6 +948,8 @@ img{display:block;max-width:100%}
               <button class="btn" @click="A.exportJson"><icon name="download" :size="13"/> 导出 JSON</button>
               <button class="btn" @click="A.triggerImport"><icon name="upload" :size="13"/> 导入并合并</button>
               <button class="btn btn-danger" @click="A.wipeAll">清空全部</button>
+              <button class="btn" @click="A.purgeTombstones">清理删除标记</button>
+              <button class="btn" @click="A.clearSecrets">清除本机密钥</button>
             </div>
             <input ref="importEl" type="file" accept="application/json,.json" hidden @change="A.importJson">
             <div class="help">共 {{ S.tasks.length }} 条记录（含已删除软标记 {{ G.deletedCount }} 条），存储在 IndexedDB。</div>
@@ -1251,14 +1261,66 @@ img{display:block;max-width:100%}
     return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10) +
       Math.random().toString(36).slice(2, 6);
   }
+  function getDeviceId() {
+    try {
+      var id = localStorage.getItem('chrononoteDeviceId');
+      if (!id) { id = uid(); localStorage.setItem('chrononoteDeviceId', id); }
+      return id;
+    } catch (e) { return uid(); }
+  }
+  var DEVICE_ID = getDeviceId();
+  var SCHEMA_VERSION = 2;
+  var REGISTRY_KEY = 'chrononoteDevices';
+  var REGISTRY_TTL = 180 * 24 * 3600 * 1000;
+  function loadRegistry() {
+    try {
+      var r = JSON.parse(localStorage.getItem(REGISTRY_KEY) || '{}');
+      return (r && typeof r === 'object' && !Array.isArray(r)) ? r : {};
+    } catch (e) { return {}; }
+  }
+  function saveRegistry(r) {
+    try { localStorage.setItem(REGISTRY_KEY, JSON.stringify(r || {})); } catch (e) { /* 配额或隐私模式：忽略 */ }
+  }
+  function mergeRegistry(base, extra) {
+    var out = {};
+    Object.keys(base || {}).forEach(function (k) { out[k] = Number(base[k]) || 0; });
+    Object.keys(extra || {}).forEach(function (k) { out[k] = Math.max(out[k] || 0, Number(extra[k]) || 0); });
+    return out;
+  }
+  function touchTask(task) {
+    if (!task) return;
+    task.updatedAt = Math.max(Date.now(), (Number(task.updatedAt) || 0) + 1);
+    task.updatedBy = DEVICE_ID;
+    task.updateId = uid();
+  }
 
   function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
   function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
   function isoToday() { return ymd(new Date()); }
+  function isLeapYear(year) { return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0); }
+  function daysInMonth(year, month) {
+    if (month === 2) return isLeapYear(year) ? 29 : 28;
+    return [4, 6, 9, 11].indexOf(month) >= 0 ? 30 : 31;
+  }
+  function isValidISODate(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+    if (!m) return false;
+    var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    return y >= 1 && y <= 9999 && mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth(y, mo);
+  }
+  function isValidTime(s) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(s || ''));
+    if (!m) return false;
+    var h = Number(m[1]), min = Number(m[2]);
+    return h >= 0 && h <= 23 && min >= 0 && min <= 59;
+  }
   function parseISO(s) {
-    var p = String(s || '').split('-').map(Number);
-    if (p.length < 3 || !p[0] || !p[1] || !p[2]) return null;
-    return new Date(p[0], p[1] - 1, p[2]);
+    if (!isValidISODate(s)) return null;
+    var p = String(s).split('-').map(Number);
+    var d = new Date(0);
+    d.setHours(0, 0, 0, 0);
+    d.setFullYear(p[0], p[1] - 1, p[2]);
+    return d;
   }
   function addDays(d, n) { var x = new Date(d.getTime()); x.setDate(x.getDate() + n); return x; }
   function dayDiff(a, b) {
@@ -1359,6 +1421,7 @@ img{display:block;max-width:100%}
    */
   function parseNatural(raw) {
     var text = String(raw == null ? '' : raw);
+    var originalText = text;
     var now = new Date();
     var today = startOfDay(now);
     var hour = null, minute = 0, hasTime = false;
@@ -1417,8 +1480,12 @@ img{display:block;max-width:100%}
 
     if (hasTime) {
       hour = to24(hour, period);
-      if (hour == null || isNaN(hour) || hour < 0 || hour > 23) { hasTime = false; hour = null; }
-      if (minute == null || isNaN(minute) || minute < 0 || minute > 59) minute = 0;
+      if (hour == null || isNaN(hour) || hour < 0 || hour > 23 ||
+          minute == null || isNaN(minute) || minute < 0 || minute > 59) {
+        /* 不要把非法时间静默删掉，也不要将它误判成无日期的明天。 */
+        return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
+          title: cleanTitle(originalText), matched: '' };
+      }
     }
 
     /* ---- 1.2b 倒计时式相对时间：3天后 / 2周后 / 2小时后 / 半小时后 / 20分钟后 ---- */
@@ -1534,12 +1601,15 @@ img{display:block;max-width:100%}
       var m7 = /(\d{4})\s*[-\/年.]\s*(\d{1,2})\s*[-\/月.]\s*(\d{1,2})\s*[日号]?/.exec(text);
       if (m7) {
         var y7 = parseInt(m7[1], 10), mo7 = parseInt(m7[2], 10), dd7 = parseInt(m7[3], 10);
-        if (mo7 >= 1 && mo7 <= 12 && dd7 >= 1 && dd7 <= 31) {
-          dateISO = y7 + '-' + pad2(mo7) + '-' + pad2(dd7);
-          hasDate = true;
-          matchedParts.push(m7[0]);
-          text = cut(text, m7.index, m7[0].length);
+        var iso7 = y7 + '-' + pad2(mo7) + '-' + pad2(dd7);
+        if (!isValidISODate(iso7)) {
+          return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
+            title: cleanTitle(originalText), matched: '' };
         }
+        dateISO = iso7;
+        hasDate = true;
+        matchedParts.push(m7[0]);
+        text = cut(text, m7.index, m7[0].length);
       }
     }
 
@@ -1548,10 +1618,22 @@ img{display:block;max-width:100%}
       var m8 = /(\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[日号]/.exec(text);
       if (m8) {
         var mo8 = cn2int(m8[1]), dd8 = cn2int(m8[2]);
+        if (mo8 == null || dd8 == null || mo8 < 1 || mo8 > 12 || dd8 < 1 || dd8 > 31) {
+          return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
+            title: cleanTitle(originalText), matched: '' };
+        }
         if (mo8 >= 1 && mo8 <= 12 && dd8 >= 1 && dd8 <= 31) {
-          var cand = new Date(now.getFullYear(), mo8 - 1, dd8);
-          if (cand < today) cand = new Date(now.getFullYear() + 1, mo8 - 1, dd8);
-          dateISO = ymd(cand);
+          var candISO = null;
+          for (var yy8 = now.getFullYear(); yy8 <= now.getFullYear() + 8; yy8++) {
+            var candidateISO8 = yy8 + '-' + pad2(mo8) + '-' + pad2(dd8);
+            var candidateDate8 = parseISO(candidateISO8);
+            if (candidateDate8 && candidateDate8 >= today) { candISO = candidateISO8; break; }
+          }
+          if (!candISO) {
+            return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
+              title: cleanTitle(originalText), matched: '' };
+          }
+          dateISO = candISO;
           hasDate = true;
           matchedParts.push(m8[0]);
           text = cut(text, m8.index, m8[0].length);
@@ -1682,8 +1764,10 @@ img{display:block;max-width:100%}
     if (!raw || typeof raw !== 'object') return null;
     var now = Date.now();
     var timeType = VALID_TYPES.indexOf(raw.timeType) >= 0 ? raw.timeType : null;
-    var targetDate = /^\d{4}-\d{2}-\d{2}$/.test(String(raw.targetDate || '')) ? String(raw.targetDate) : null;
-    var targetTime = /^\d{1,2}:\d{2}$/.test(String(raw.targetTime || '')) ? String(raw.targetTime) : null;
+    var rawDate = String(raw.targetDate || '');
+    var targetDate = isValidISODate(rawDate) ? rawDate : null;
+    var rawTime = String(raw.targetTime || '');
+    var targetTime = isValidTime(rawTime) ? (pad2(Number(rawTime.split(':')[0])) + ':' + rawTime.split(':')[1]) : null;
     /* 前向兼容：只校验形状，不校验取值。别的设备写入的新档位原样保留 */
     var rawFuzzy = String(raw.fuzzyTag == null ? '' : raw.fuzzyTag).trim().toLowerCase();
     var fuzzyTag = /^[a-z0-9_]{1,32}$/.test(rawFuzzy) ? rawFuzzy : null;
@@ -1712,7 +1796,7 @@ img{display:block;max-width:100%}
       raw.notes.forEach(function (n) { var x = normalizeNote(n); if (x) notes.push(x); });
     }
 
-    return {
+    var out = {
       id: raw.id ? String(raw.id) : uid(),
       title: String(raw.title == null ? '' : raw.title).trim() || '未命名事项',
       timeType: timeType,
@@ -1723,13 +1807,20 @@ img{display:block;max-width:100%}
       deleted: !!raw.deleted,
       createdAt: Number(raw.createdAt) || now,
       updatedAt: Number(raw.updatedAt) || Number(raw.createdAt) || now,
+      updatedBy: String(raw.updatedBy || ''),
+      updateId: String(raw.updateId || ''),
       notes: notes
     };
+    /* 前向兼容：不认识的字段原样保留，避免本端把别的设备写入的新属性洗掉 */
+    Object.keys(raw).forEach(function (k) {
+      if (!Object.prototype.hasOwnProperty.call(out, k)) out[k] = raw[k];
+    });
+    return out;
   }
 
   function makeTask(title, time, notes) {
     var now = Date.now();
-    return normalizeTask({
+    var task = normalizeTask({
       id: uid(),
       title: title,
       timeType: time && time.timeType ? time.timeType : 'nodate',
@@ -1742,6 +1833,8 @@ img{display:block;max-width:100%}
       updatedAt: now,
       notes: notes || []
     });
+    touchTask(task);
+    return task;
   }
 
   function makeTextNote(text) {
@@ -1759,10 +1852,13 @@ img{display:block;max-width:100%}
   /* ==========================================================================
    * 3. 存储（IndexedDB / localforage）
    * ======================================================================== */
+  var dbPersistent = false;
   var db = (function () {
     try {
       if (window.localforage) {
-        return localforage.createInstance({ name: DB_NAME, storeName: 'chrononote' });
+        var instance = localforage.createInstance({ name: DB_NAME, storeName: 'chrononote' });
+        dbPersistent = true;
+        return instance;
       }
     } catch (e) { /* ignore */ }
     var mem = null;
@@ -2032,7 +2128,7 @@ img{display:block;max-width:100%}
         if (!v) { return; }
         if (v !== props.task.title) {
           props.task.title = v;
-          props.task.updatedAt = Date.now();
+          touchTask(props.task);
         }
       }
       function cancelTitle() {
@@ -2046,7 +2142,7 @@ img{display:block;max-width:100%}
         var v = String(editText.value || '').trim();
         if (!v) { return; }
         n.content = v;
-        props.task.updatedAt = Date.now();
+        touchTask(props.task);
         cancelNote();
       }
       function addText() {
@@ -2170,6 +2266,7 @@ img{display:block;max-width:100%}
       /* ---------- 状态 ---------- */
       var S = reactive({
         ready: false,
+        storageWarning: '',
         tasks: [],
         search: '',
         tab: 'timeline',
@@ -2230,14 +2327,24 @@ img{display:block;max-width:100%}
       var suppressAutoSync = false;
       var dirtySinceSync = false;
       function persistNow() {
+        if (S.storageWarning && /读取本地数据库失败|无法识别的记录|数据库格式无法识别/.test(S.storageWarning)) {
+          return Promise.resolve();
+        }
         try {
           var plain = JSON.parse(JSON.stringify(S.tasks));
-          return db.setItem(DB_KEY, plain).catch(function (e) {
+          return db.setItem(DB_KEY, plain).then(function () {
+            if (dbPersistent && S.storageWarning && /本地保存失败|数据序列化失败/.test(S.storageWarning)) {
+              S.storageWarning = '';
+            }
+          }).catch(function (e) {
             console.error('[ChronoNote] 写入失败', e);
+            S.storageWarning = '本地保存失败，当前修改可能无法在刷新后保留。请先导出备份，并检查浏览器存储权限。';
             toast('本地存储写入失败：' + (e && e.message ? e.message : '未知错误'), true);
           });
         } catch (e) {
           console.error('[ChronoNote] 序列化失败', e);
+          S.storageWarning = '数据序列化失败，当前修改尚未确认保存。请导出可用数据并检查控制台错误。';
+          toast('本地数据序列化失败', true);
           return Promise.resolve();
         }
       }
@@ -2278,6 +2385,12 @@ img{display:block;max-width:100%}
       /* ---------- 时间属性落地 ---------- */
       function applyTime(t, payload) {
         if (!t || !payload) return;
+        if (VALID_TYPES.indexOf(payload.timeType) < 0) { toast('时间类型无效', true); return; }
+        if ((payload.timeType === 'exact_date' || payload.timeType === 'exact_time') &&
+            !isValidISODate(String(payload.targetDate || ''))) { toast('日期无效，请重新选择', true); return; }
+        if (payload.timeType === 'exact_time' && !isValidTime(String(payload.targetTime || ''))) {
+          toast('时间无效，请重新选择', true); return;
+        }
         if (payload.timeType === 'nodate') {
           t.timeType = 'nodate'; t.targetDate = null; t.targetTime = null; t.fuzzyTag = null;
         } else if (payload.timeType === 'fuzzy') {
@@ -2294,26 +2407,26 @@ img{display:block;max-width:100%}
           t.targetTime = null;
           t.fuzzyTag = null;
         }
-        t.updatedAt = Date.now();
+        touchTask(t);
       }
 
       /* ---------- 任务动作 ---------- */
       function toggleTask(t) {
         t.completed = !t.completed;
-        t.updatedAt = Date.now();
+        touchTask(t);
         if (t.completed) S.doneOpen = true;
       }
-      function restoreTask(t) { t.completed = false; t.updatedAt = Date.now(); }
+      function restoreTask(t) { t.completed = false; touchTask(t); }
       function removeTask(t) {
         if (!t || t.deleted) return;
         t.deleted = true;
-        t.updatedAt = Date.now();
+        touchTask(t);
         var snapshot = t.notes.slice();
         var tid = t.id;
         toast('已删除「' + String(t.title).slice(0, 14) + '」', false, '撤销', function () {
           t.deleted = false;
           t.notes = snapshot;
-          t.updatedAt = Date.now();
+          touchTask(t);
         });
         /* 撤销期（6 秒）过后把 Base64 图片从墓碑上摘掉，防止 Gist 越滚越大 */
         setTimeout(function () {
@@ -2323,21 +2436,20 @@ img{display:block;max-width:100%}
           }
           if (cur && cur.deleted && cur.notes && cur.notes.length) {
             cur.notes = [];
-            cur.updatedAt = Date.now();
+            touchTask(cur);
           }
         }, 6500);
       }
 
-      /* 墓碑回收：已删任务去掉备注；超过 30 天的墓碑物理删除 */
-      var TOMBSTONE_TTL = 30 * 24 * 3600 * 1000;
+      /* 墓碑保留：没有所有设备的同步确认机制时，不能安全地按 TTL 物理删除。 */
 
       /* 立即剥离所有墓碑上的 Base64（切后台推送前也要先跑一次，别把大图推上去） */
       function stripAllDeletedNotes() {
-        var now = Date.now(), changed = false;
+        var changed = false;
         S.tasks.forEach(function (t) {
           if (t.deleted && t.notes && t.notes.length) {
             t.notes = [];
-            t.updatedAt = now;
+            touchTask(t);
             changed = true;
           }
         });
@@ -2345,36 +2457,27 @@ img{display:block;max-width:100%}
       }
 
       function gcTombstones() {
-        var now = Date.now(), changed = false, keep = [];
-        S.tasks.forEach(function (t) {
-          if (!t.deleted) { keep.push(t); return; }
-          if (t.notes && t.notes.length) { t.notes = []; t.updatedAt = now; changed = true; }
-          var age = now - (Number(t.updatedAt) || 0);
-          if (age > TOMBSTONE_TTL) { changed = true; return; }
-          keep.push(t);
-        });
-        if (changed) S.tasks = keep;
-        return changed;
+        /* 仅剥离已删除事项的大型备注；墓碑本身永久保留，避免离线设备复活旧任务。 */
+        return stripAllDeletedNotes();
       }
       function clearCompleted() {
-        var ids = [], now = Date.now(), snapshots = {};
+        var ids = [], snapshots = {};
         S.tasks.forEach(function (t) {
           if (t.completed && !t.deleted) {
             t.deleted = true;
-            t.updatedAt = now;
+            touchTask(t);
             ids.push(t.id);
             if (t.notes && t.notes.length) snapshots[t.id] = t.notes.slice();
           }
         });
         if (!ids.length) return;
         toast('已清空 ' + ids.length + ' 项已完成', false, '撤销', function () {
-          var stamp = Date.now();
           S.tasks.forEach(function (t) {
             if (ids.indexOf(t.id) >= 0) {
               t.deleted = false;
               /* 万一撤销与 6.5s 剥离撞在同一拍，用快照补回备注 */
               if ((!t.notes || !t.notes.length) && snapshots[t.id]) t.notes = snapshots[t.id].slice();
-              t.updatedAt = stamp;
+              touchTask(t);
             }
           });
         });
@@ -2389,20 +2492,20 @@ img{display:block;max-width:100%}
       function addNote(t, note) {
         if (!note) return;
         t.notes.push(note);
-        t.updatedAt = Date.now();
+        touchTask(t);
         if (S.expanded.indexOf(t.id) < 0) S.expanded.push(t.id);
       }
       function addNotes(t, list) {
         if (!list || !list.length) return;
         list.forEach(function (n) { t.notes.push(n); });
-        t.updatedAt = Date.now();
+        touchTask(t);
         if (S.expanded.indexOf(t.id) < 0) S.expanded.push(t.id);
       }
       function deleteNote(t, note) {
         var i = t.notes.indexOf(note);
         if (i >= 0) {
           t.notes.splice(i, 1);
-          t.updatedAt = Date.now();
+          touchTask(t);
         }
       }
 
@@ -2414,13 +2517,17 @@ img{display:block;max-width:100%}
             return makeImageNote(d);
           }).catch(function (e) {
             console.warn('[ChronoNote] 图片压缩失败', e);
-            toast('有 ' + 1 + ' 张图片处理失败', true);
             return null;
           });
         });
         Promise.all(jobs).then(function (list) {
           var ok = list.filter(Boolean);
+          var failed = list.length - ok.length;
+          if (failed) toast('有 ' + failed + ' 张图片处理失败', true);
           if (ok.length) cb(ok);
+        }).catch(function (e) {
+          console.error('[ChronoNote] 图片批量处理失败', e);
+          toast('图片处理失败，请重试', true);
         });
       }
 
@@ -2557,7 +2664,8 @@ img{display:block;max-width:100%}
         return [
           '你是 ChronoNote 的时间解析与任务拆解引擎，负责把用户的一句话拆成若干条独立事项。',
           '当前时间：' + d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' +
-            pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + '（' + wk + '），时区 Asia/Shanghai。',
+            pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + '（' + wk + '），设备时区 ' +
+            ((Intl.DateTimeFormat().resolvedOptions().timeZone) || '本地时区') + '。',
           '今天是 ' + ymd(d) + '，本周一是 ' + ymd(addDays(startOfDay(d), -((d.getDay() + 6) % 7))) + '。',
           '',
           '只输出一个 JSON 对象，形如 {"tasks":[ ... ]}，不要输出解释、不要用 markdown 代码块。',
@@ -2630,6 +2738,7 @@ img{display:block;max-width:100%}
           catch (e) { parsed = JSON.parse(stripFence(content)); }
           var arr = Array.isArray(parsed) ? parsed : (parsed && parsed.tasks);
           if (!Array.isArray(arr)) throw new Error('AI 返回的 JSON 不含 tasks 数组');
+          if (arr.length > 100) throw new Error('AI 返回事项过多（超过 100 条），请缩小输入范围');
           return arr;
         }).then(function (v) {
           clearTimeout(timer);
@@ -2740,11 +2849,12 @@ img{display:block;max-width:100%}
         var out = [];
         var overdueDates = dates.filter(function (d) { return d < today; });
         if (overdueDates.length) {
+          var oldestOverdueDate = overdueDates[0];
           var od = [];
-          overdueDates.sort().reverse().forEach(function (d) { od = od.concat(sortDay(map.get(d))); });
+          overdueDates.slice().sort().reverse().forEach(function (d) { od = od.concat(sortDay(map.get(d))); });
           out.push({
             key: 'overdue', kind: 'overdue', icon: '⚠️', title: '已过期',
-            sub: '最早 ' + fmtMD(overdueDates[0]) + ' · 共 ' + od.length + ' 项',
+            sub: '最早 ' + fmtMD(oldestOverdueDate) + ' · 共 ' + od.length + ' 项',
             items: od
           });
         }
@@ -2902,21 +3012,56 @@ img{display:block;max-width:100%}
       function syncPayload(list) {
         return {
           app: 'chrononote',
-          schema: 1,
+          schema: SCHEMA_VERSION,
           updatedAt: Date.now(),
           count: list.length,
+          devices: loadRegistry(),
           tasks: JSON.parse(JSON.stringify(list))
         };
       }
 
       function parseRemoteTasks(data) {
-        if (!data) return [];
         if (Array.isArray(data)) return data.map(normalizeTask).filter(Boolean);
-        if (Array.isArray(data.tasks)) return data.tasks.map(normalizeTask).filter(Boolean);
-        return [];
+        if (data && typeof data === 'object' && Array.isArray(data.tasks)) {
+          return data.tasks.map(normalizeTask).filter(Boolean);
+        }
+        throw new Error('数据格式不受支持：预期为任务数组或包含 tasks 数组的对象');
       }
 
-      /** 严格按 updatedAt 取新；时间戳相同则优先保留删除态，其次保留备注更多的一方 */
+      function parseRemotePayload(data) {
+        var tasks = parseRemoteTasks(data);
+        var devices = {};
+        var schema = 1;
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+          if (data.devices && typeof data.devices === 'object') devices = data.devices;
+          schema = Number(data.schema) || 1;
+        }
+        return { tasks: tasks, devices: devices, schema: schema };
+      }
+
+      /**
+       * 设备确认式墓碑回收：仅当「所有已知设备都在该删除之后同步过」才物理删除墓碑。
+       * 冷启动不执行，只在真正拉取到云端元数据后执行。
+       */
+      function gcAckTombstones(registry) {
+        var now = Date.now();
+        var others = Object.keys(registry).filter(function (k) { return k !== DEVICE_ID; });
+        var minAck;
+        if (!others.length) {
+          minAck = now - 3600 * 1000;
+        } else {
+          minAck = Math.min.apply(null, others.map(function (k) { return Number(registry[k]) || 0; }));
+        }
+        var dropped = 0;
+        S.tasks = S.tasks.filter(function (t) {
+          if (!t.deleted) return true;
+          if ((Number(t.updatedAt) || 0) < minAck) { dropped++; return false; }
+          return true;
+        });
+        return dropped;
+      }
+
+      /** 按 updatedAt、设备 ID、操作 ID 确定顺序；完全相同才比较删除态与备注数量。 */
       function mergeTasks(local, remote) {
         var map = new Map();
         local.forEach(function (t) { map.set(t.id, t); });
@@ -2926,6 +3071,12 @@ img{display:block;max-width:100%}
           var lu = Number(l.updatedAt) || 0, ru = Number(r.updatedAt) || 0;
           if (ru > lu) { map.set(r.id, r); return; }
           if (ru < lu) return;
+          var lb = String(l.updatedBy || ''), rb = String(r.updatedBy || '');
+          if (rb > lb) { map.set(r.id, r); return; }
+          if (rb < lb) return;
+          var li = String(l.updateId || ''), ri = String(r.updateId || '');
+          if (ri > li) { map.set(r.id, r); return; }
+          if (ri < li) return;
           if (r.deleted && !l.deleted) { map.set(r.id, r); return; }
           if (l.deleted && !r.deleted) return;
           if ((r.notes ? r.notes.length : 0) > (l.notes ? l.notes.length : 0)) map.set(r.id, r);
@@ -2934,6 +3085,10 @@ img{display:block;max-width:100%}
       }
 
       function doSync(silent) {
+        if (S.storageWarning && /读取本地数据库失败|持久化存储组件不可用|本地保存失败|序列化失败|无法识别的记录|数据库格式无法识别/.test(S.storageWarning)) {
+          if (!silent) toast('本地数据状态异常，已暂停云同步以防覆盖数据。请先导出备份并修复本地存储。', true);
+          return Promise.resolve();
+        }
         var token = String(S.settings.githubToken || '').trim();
         if (!token) {
           if (!silent) { S.settingsOpen = true; toast('请先在设置里填写 GitHub Token', true); }
@@ -2945,35 +3100,63 @@ img{display:block;max-width:100%}
         var gid = String(S.settings.gistId || '').trim();
         var remoteTasks = null;
 
+        var gistPath = '/gists/' + encodeURIComponent(gid);
         var pull = gid
-          ? ghFetch('/gists/' + gid).then(function (data) {
+          ? ghFetch(gistPath).then(function (data) {
               var file = (data.files && (data.files['tasks.json'] || data.files['chrononote.json'])) || null;
-              if (!file) return [];
+              if (!file) throw new Error('Gist 中找不到 tasks.json 或 chrononote.json；为防止覆盖未知数据，已停止同步');
               if (file.truncated || !file.content) {
-                if (!file.raw_url) return [];
-                return fetch(file.raw_url).then(function (r) { return r.text(); }).then(function (txt) {
-                  return parseRemoteTasks(JSON.parse(txt));
+                if (!file.raw_url) throw new Error('Gist 文件内容被截断且没有 raw_url，已停止同步以防数据丢失');
+                var rawUrl;
+                try { rawUrl = new URL(file.raw_url); } catch (e) { throw new Error('Gist 原始文件地址无效'); }
+                if (rawUrl.protocol !== 'https:' || rawUrl.hostname !== 'gist.githubusercontent.com') {
+                  throw new Error('Gist 原始文件域名不可信，已停止同步');
+                }
+                return fetch(rawUrl.href, {
+                  headers: {
+                    'Accept': 'application/vnd.github.raw+json',
+                    'Authorization': 'Bearer ' + token
+                  }
+                }).then(function (r) {
+                  if (!r.ok) throw new Error('读取 Gist 原始文件失败（HTTP ' + r.status + '）');
+                  return r.text();
+                }).then(function (txt) {
+                  return parseRemotePayload(JSON.parse(txt));
                 });
               }
-              return parseRemoteTasks(JSON.parse(file.content));
+              return parseRemotePayload(JSON.parse(file.content));
             })
           : Promise.resolve(null);
+        pull = pull.then(function (p) {
+          if (p && p.schema > SCHEMA_VERSION) {
+            throw new Error('云端数据由更新版本写入（schema ' + p.schema + '），为避免覆盖已停止同步，请先把本端升级到最新版');
+          }
+          return p;
+        });
 
-        return pull.then(function (remote) {
-          remoteTasks = remote;
+        return pull.then(function (payload) {
+          var remote = payload ? payload.tasks : [];
           var merged;
           if (gid) {
-            merged = mergeTasks(S.tasks.slice(), remoteTasks || []);
+            merged = mergeTasks(S.tasks.slice(), remote);
           } else {
             merged = S.tasks.slice();
           }
           suppressAutoSync = true;
           S.tasks = merged;
           nextTick(function () { suppressAutoSync = false; });
-          return persisted();
-          function persisted() {
-            return db.setItem(DB_KEY, JSON.parse(JSON.stringify(merged)));
-          }
+
+          /* 设备登记：记录每台设备最近一次同步时间，用于安全回收墓碑 */
+          var registry = mergeRegistry(loadRegistry(), payload ? payload.devices : {});
+          registry[DEVICE_ID] = Date.now();
+          var cutoff = Date.now() - REGISTRY_TTL;
+          Object.keys(registry).forEach(function (k) {
+            if (k !== DEVICE_ID && (Number(registry[k]) || 0) < cutoff) delete registry[k];
+          });
+          if (gid && payload) gcAckTombstones(registry);
+          saveRegistry(registry);
+
+          return db.setItem(DB_KEY, JSON.parse(JSON.stringify(S.tasks)));
         }).then(function () {
           var content = JSON.stringify(syncPayload(S.tasks), null, 2);
           if (!gid) {
@@ -2991,7 +3174,7 @@ img{display:block;max-width:100%}
               return created;
             });
           }
-          return ghFetch('/gists/' + gid, {
+          return ghFetch(gistPath, {
             method: 'PATCH',
             body: JSON.stringify({ files: { 'tasks.json': { content: content } } })
           });
@@ -3028,7 +3211,7 @@ img{display:block;max-width:100%}
       function syncClick() {
         if (!String(S.settings.githubToken || '').trim()) {
           S.settingsOpen = true;
-          toast('先配置 GitHub Token 与 Gist，即可双端无损同步', true);
+          toast('先配置 GitHub Token 与 Gist，即可进行跨端同步', true);
           return;
         }
         doSync(false);
@@ -3075,13 +3258,56 @@ img{display:block;max-width:100%}
       function wipeAll() {
         askConfirm({
           title: '清空全部数据？',
-          body: '将删除本机保存的所有事项与备注图片（云端 Gist 不会自动删除，下次同步可能拉回）。此操作不可撤销。',
+          body: '会把本机所有事项标记为已删除并推送到云端，其他设备同步后同样清空；图片备注一并移除。墓碑（删除标记）会保留，否则下次合并会把旧事项从 Gist 拉回来。此操作不可撤销。',
           okText: '确认清空',
           danger: true,
           onOk: function () {
-            S.tasks = [];
+            var n = 0;
+            S.tasks.forEach(function (t) {
+              if (!t.deleted) {
+                t.deleted = true;
+                t.notes = [];
+                touchTask(t);
+                n++;
+              }
+            });
             persistNow();
-            toast('本地数据已清空');
+            toast('已清空 ' + n + ' 条，正在同步');
+            if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) doSync(true);
+          }
+        });
+      }
+
+      /* 一键清除本机明文保存的密钥（CDN 第三方脚本能读到它们，这是唯一的减法） */
+      function clearSecrets() {
+        askConfirm({
+          title: '清除本机保存的密钥？',
+          body: '将删除本机保存的 DeepSeek API Key 与 GitHub Token（Gist ID 保留）。密钥存在 localStorage 里，任何能运行本页脚本的第三方代码都可能读取；在公用电脑上用完建议清除。',
+          okText: '确认清除',
+          danger: true,
+          onOk: function () {
+            S.settings.deepseekApiKey = '';
+            S.settings.githubToken = '';
+            saveCfg();
+            toast('已清除本机保存的密钥');
+          }
+        });
+      }
+
+      /* 手动回收墓碑：默认不自动删，只有用户明确知道风险时才执行 */
+      function purgeTombstones() {
+        var dead = S.tasks.filter(function (t) { return t.deleted; });
+        if (!dead.length) { toast('没有可清理的删除标记'); return; }
+        askConfirm({
+          title: '清理 ' + dead.length + ' 条删除标记？',
+          body: '清除后这些事项不会再出现在任何设备上。代价：某台设备若长期离线、本地仍保留旧副本，重新同步时可能让它们复活；如果所有设备都正常同步过，可安全清理。',
+          okText: '确认清理',
+          danger: true,
+          onOk: function () {
+            S.tasks = S.tasks.filter(function (t) { return !t.deleted; });
+            persistNow();
+            toast('已清除 ' + dead.length + ' 条删除标记');
+            if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) doSync(true);
           }
         });
       }
@@ -3101,11 +3327,11 @@ img{display:block;max-width:100%}
         }
       }
       function promoteNextWeek() {
-        var now = Date.now(), n = 0;
+        var n = 0;
         S.tasks.forEach(function (t) {
           if (!t.deleted && !t.completed && t.timeType === 'fuzzy' && t.fuzzyTag === 'next_week') {
             t.fuzzyTag = 'this_week';
-            t.updatedAt = now;
+            touchTask(t);
             n++;
           }
         });
@@ -3136,12 +3362,23 @@ img{display:block;max-width:100%}
 
       onMounted(function () {
         loadCfg();
+        if (!dbPersistent) {
+          S.storageWarning = '持久化存储组件不可用，目前仅使用临时内存；刷新或关闭页面可能丢失全部事项。请检查网络/CDN 或浏览器设置。';
+        }
         db.getItem(DB_KEY).then(function (raw) {
           if (Array.isArray(raw)) {
-            S.tasks = raw.map(normalizeTask).filter(Boolean);
+            var normalized = raw.map(normalizeTask);
+            var invalidCount = normalized.filter(function (t) { return !t; }).length;
+            S.tasks = normalized.filter(Boolean);
+            if (invalidCount) {
+              S.storageWarning = '本地数据库有 ' + invalidCount + ' 条无法识别的记录；为避免覆盖原始数据，已暂停自动保存与云同步。请先保留浏览器数据并检查备份。';
+            }
+          } else if (raw !== null && raw !== undefined) {
+            S.storageWarning = '本地数据库格式无法识别；为避免覆盖原始数据，已暂停自动保存与云同步。请先保留浏览器数据并检查备份。';
           }
         }).catch(function (e) {
           console.error('[ChronoNote] 读取失败', e);
+          S.storageWarning = '读取本地数据库失败；为避免覆盖旧数据，当前请勿清空数据或进行首次云同步。请先检查浏览器存储权限。';
         }).then(function () {
           S.ready = true;
           if (gcTombstones()) persistNow();
@@ -3242,6 +3479,8 @@ img{display:block;max-width:100%}
         importJson: importJson,
         triggerImport: triggerImport,
         wipeAll: wipeAll,
+        clearSecrets: clearSecrets,
+        purgeTombstones: purgeTombstones,
         promoteNextWeek: promoteNextWeek,
         dismissBanner: dismissBanner,
         openSettings: openSettings,
@@ -3293,7 +3532,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.2.2', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.4.0', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
