@@ -1,0 +1,30 @@
+{
+  "name": "ChronoNote · 智能时间流记事与待办",
+  "short_name": "ChronoNote",
+  "description": "一句话记下，自动落到时间轴上。本地优先，支持 GitHub Gist 跨端同步与中文自然语言解析。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "id": "/chrononote/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#F8FAFC",
+  "theme_color": "#F8FAFC",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "今天要做什么",
+      "short_name": "今日",
+      "description": "直接打开时间轴并聚焦今日计划",
+      "url": "./?view=today",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

@@ -110,6 +110,14 @@ GitHub Gist 双向增量合并：
 
 **离线用：** 下载 `index.html`，双击即可（首次加载需要联网取 CDN 依赖）
 
+**装到手机桌面（安卓）：**
+
+1. 用 **Chrome** 打开上面的网址（必须是 https，微信内置浏览器不行）
+2. 右上角 ⋮ → **安装应用**（没有这一项就用「添加到主屏幕」）
+3. 装完是一个独立窗口：没有地址栏、任务栏有独立图标、断网也能打开
+
+> iPhone 上 Chrome 没有这个功能，请用 **Safari** 打开 → 分享 → 添加到主屏幕（可全屏运行）。
+
 **开同步：**
 
 1. 到 [github.com/settings/tokens](https://github.com/settings/tokens) 创建 **classic** token，只勾 `gist` 一项（fine-grained token 不支持 Gist）
@@ -123,8 +131,9 @@ GitHub Gist 双向增量合并：
 本仓库即站点源：
 
 1. 用新的 `index.html` 覆盖仓库里的同名文件（`Add file → Upload files`）
-2. Settings → Pages 已配置为 `main` / `root`，提交后约 1 分钟自动重建
-3. 各端刷新页面即生效
+2. PWA 相关文件首次部署时需要一并上传：`manifest.webmanifest`、`sw.js`、`icons/`（否则安卓只能生成书签，不能安装）
+3. Settings → Pages 已配置为 `main` / `root`，提交后约 1 分钟自动重建
+4. 各端刷新页面即生效（Service Worker 对页面走网络优先，新版本刷新即可拿到）
 
 ---
 
@@ -139,7 +148,8 @@ Vue 3（全局构建 CDN）· Tailwind CSS（CDN）· Lucide Icons（CDN）· Lo
 ## 已知限制
 
 - 首次打开需联网加载 CDN 依赖；断网后依赖浏览器缓存
-- 没有 manifest / Service Worker，安卓加桌面是快捷方式（iOS 加主屏可全屏运行）
+- 已内置 manifest 与 Service Worker：安卓 Chrome 可「安装应用」（独立窗口 + 独立图标），装过一次后断网也能打开；iOS 加主屏可全屏运行
+- 首次安装那一次必须联网（要从 CDN 取 Vue / LocalForage 等依赖），之后由 Service Worker 缓存接管
 - 同步在页面打开时自动执行一次，本地改动后 8 秒自动推送；想看即时状态可手动点「立即同步」
 - AI 拆解依赖 DeepSeek API，Key 与网络均需自备
 
