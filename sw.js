@@ -4,7 +4,7 @@
  * 第三方 API（DeepSeek / GitHub）一律直连，绝不进缓存——否则同步会读到旧 Gist。
  * 改版时请同步修改 CACHE 常量，旧缓存会在 activate 时清掉。
  */
-const CACHE = 'chrononote-v1.6.1';
+const CACHE = 'chrononote-v1.6.2';
 const PRECACHE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 /* 这些域名的请求必须直连，缓存会导致同步/AI 读到旧数据 */

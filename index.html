@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.6.1
+  ChronoNote · 智能时间流记事与待办 v1.6.2
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
@@ -2114,13 +2114,32 @@ img{display:block;max-width:100%}
     'help': [['circle', { cx: '12', cy: '12', r: '9' }], ['path', { d: 'M9.5 9a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.7M12 17h.01' }]]
   };
 
+  /* lucide 有两种导出形态：
+     · 旧版：[[tag, attrs], [tag, attrs, kids?], ...]   （节点数组）
+     · 0.4xx+：[ 'svg', attrs, [ ...节点 ] ]            （单个 svg 节点）
+     两种都要能吃下，否则 Icon 组件会整片渲染失败。 */
+  function isIconNode(n) {
+    return Array.isArray(n) && typeof n[0] === 'string' && (n[2] === undefined || Array.isArray(n[2]));
+  }
+
+  function normalizeIconNodes(raw) {
+    if (!raw) return null;
+    if (Array.isArray(raw) && raw[0] === 'svg') {
+      var kids = raw[2];
+      return Array.isArray(kids) && kids.length && kids.every(isIconNode) ? kids : null;
+    }
+    if (Array.isArray(raw) && raw.length && raw.every(isIconNode)) return raw;
+    return null;
+  }
+
   function nodeToSvg(node) {
-    if (!node || !node[0]) return '';
+    if (!isIconNode(node)) return '';
     var tag = node[0], attrs = node[1] || {}, kids = node[2];
     var a = Object.keys(attrs).map(function (k) {
       return ' ' + k + '="' + String(attrs[k]).replace(/"/g, '&quot;') + '"';
     }).join('');
-    return '<' + tag + a + '>' + (kids ? kids.map(nodeToSvg).join('') : '') + '</' + tag + '>';
+    var inner = Array.isArray(kids) ? kids.map(nodeToSvg).join('') : '';
+    return '<' + tag + a + '>' + inner + '</' + tag + '>';
   }
 
   var IconComp = {
@@ -2135,17 +2154,25 @@ img{display:block;max-width:100%}
         var key = String(this.name || 'help');
         var pascal = key.replace(/(^|-)([a-z])/g, function (m, a, b) { return b.toUpperCase(); });
         var nodes = null;
-        var L = window.lucide;
-        if (L && L.icons) {
-          nodes = L.icons[pascal] || L.icons[key] || null;
-          if (!nodes) {
-            var flat = key.replace(/-/g, '').toLowerCase();
-            var found = Object.keys(L.icons).filter(function (k) { return k.toLowerCase() === flat; })[0];
-            if (found) nodes = L.icons[found];
+        try {
+          var L = window.lucide;
+          if (L && L.icons) {
+            var cand = L.icons[pascal] || L.icons[key] || null;
+            if (!cand) {
+              var flat = key.replace(/-/g, '').toLowerCase();
+              var found = Object.keys(L.icons).filter(function (k) { return k.toLowerCase() === flat; })[0];
+              if (found) cand = L.icons[found];
+            }
+            nodes = normalizeIconNodes(cand);
           }
+        } catch (e) { nodes = null; }
+
+        var inner = '';
+        try { if (nodes) inner = nodes.map(nodeToSvg).join(''); } catch (e) { inner = ''; }
+        /* 任何异常或空结果都退回内置图标，保证按钮永远有图形 */
+        if (!inner) {
+          inner = (FALLBACK_ICONS[key] || FALLBACK_ICONS.help).map(nodeToSvg).join('');
         }
-        if (!Array.isArray(nodes)) nodes = FALLBACK_ICONS[key] || FALLBACK_ICONS.help;
-        var inner = nodes.map(nodeToSvg).join('');
         return '<svg xmlns="http://www.w3.org/2000/svg" width="' + this.size + '" height="' + this.size +
           '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + this.stroke +
           '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + inner + '</svg>';
@@ -3872,7 +3899,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.6.1', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.6.2', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>

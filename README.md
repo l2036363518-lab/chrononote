@@ -173,8 +173,9 @@ Vue 3（全局构建 CDN）· Tailwind CSS（CDN）· Lucide Icons（CDN）· Lo
 
 ## 版本
 
-当前 `v1.6.1`
+当前 `v1.6.2`
 
+- v1.6.2：修复图标全线不显示——`lucide@0.468` 把图标导出成 `['svg', attrs, children]` 单节点，旧代码当节点数组解析会在 `kids.map` 抛错；现在两种形态都兼容，并在任何异常时回退到内置图标
 - v1.6.1：修复并发复查分支把 Gist 响应当负载解析（会直接抛错）；**停用自动墓碑回收**，改为只在 设置 → 数据 → 清理删除标记 里手动执行；更新检测改用当前 URL 而非写死 `index.html`；更新后刷新等待 300→800 ms；Tailwind 固定 3.4.17
 - v1.6.0：审查修复——多天任务不再误判逾期并归入「今天」；同步 PATCH 前复查 `updated_at`；导入恢复 `devices`；已完成任务可按备注搜索；搜索命中备注时显示摘录；批量图片改串行处理；更新检测区分「已是最新 / 无法检查」；Vue 与 Lucide 固定版本号
 - v1.5.2：区间比较改为**分钟级**（`14:00 到 2点半` 不再误判成跨夜），并补同日倒挂拦截；Service Worker 对 `api.deepseek.com` / `api.github.com` / `gist.githubusercontent.com` 改为**直连不缓存**，静态资源改为 stale-while-revalidate
