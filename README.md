@@ -173,9 +173,10 @@ Vue 3（全局构建 CDN）· Tailwind CSS（CDN）· Lucide Icons（CDN）· Lo
 
 ## 版本
 
-当前 `v1.5.2`
+当前 `v1.6.0`
 
-- v1.5.2：区间比较改为**分钟级**（`14:00 到 2点半` 不再误判成跨夜），并补同日倒挂拦截；Service Worker 对 `api.deepseek.com` / `api.github.com` / `gist.githubusercontent.com` 改为**直连不缓存**（原来会被缓存成"缓存优先"，第二次同步可能读到旧 Gist），静态资源改为 stale-while-revalidate
+- v1.6.0：审查修复——多天任务不再误判逾期并归入「今天」；墓碑回收在无其他设备时一律不执行（并加回滚保护）；同步 PATCH 前复查 `updated_at`，检测并发写入后重新合并；导入恢复 `devices`；已完成任务可按备注搜索；搜索命中备注时显示摘录；批量图片改串行处理；更新检测区分「已是最新 / 无法检查」；Vue 与 Lucide 固定版本号
+- v1.5.2：区间比较改为**分钟级**（`14:00 到 2点半` 不再误判成跨夜），并补同日倒挂拦截；Service Worker 对 `api.deepseek.com` / `api.github.com` / `gist.githubusercontent.com` 改为**直连不缓存**，静态资源改为 stale-while-revalidate
 - v1.5.1：修复 AI 拆解漏传 `endDate`/`endTime` 且未打设备签名；修复晚间/跨夜区间的收束（20点→10点 按 22:00、23点→1点 按次日 01:00）；跨天区间不再误杀结束时刻；「检查新版」在已是最新时给出反馈
 - v1.5.0：支持**时间区间任务**（当天时段 / 跨天区间，含改期时结束日平移）；新增**版本更新检测**——部署新版后各端（含安装的 App）会提示「更新」，设置里也可手动「检查新版」
 - v1.4.2：新增 `?plain=1` 快捷方式模式（主动摘掉 manifest，绕开需要 Google 服务器的 WebAPK 铸包），并补充 `rel=icon`

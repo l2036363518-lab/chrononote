@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.5.2
+  ChronoNote · 智能时间流记事与待办 v1.6.0
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
@@ -45,10 +45,10 @@
     });
   } catch (e) {}
 </script>
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<script>window.Vue||document.write('<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"><\/script>');</script>
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-<script>window.lucide||document.write('<script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js"><\/script>');</script>
+<script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script>window.Vue||document.write('<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"><\/script>');</script>
+<script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js"></script>
+<script>window.lucide||document.write('<script src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.js"><\/script>');</script>
 <script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"></script>
 <script>window.localforage||document.write('<script src="https://unpkg.com/localforage@1.10.0/dist/localforage.min.js"><\/script>');</script>
 <script>
@@ -426,6 +426,7 @@ img{display:block;max-width:100%}
 .mini-chip:hover{background:#EEF2F7;color:var(--ink-2)}
 .meta-line{font-size:10.5px;color:var(--faint);font-family:var(--mono);letter-spacing:-.01em}
 .meta-warn{font-size:10.5px;color:#B93F3B;font-weight:600}
+.meta-hit{font-size:10.5px;color:var(--indigo);background:#F4F5FF;border-radius:4px;padding:1px 6px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
 .task-tools{display:flex;align-items:center;gap:1px;opacity:0;transition:opacity .16s;flex:0 0 auto;margin-top:-1px}
 .task:hover .task-tools,.task.is-open .task-tools,.task:focus-within .task-tools{opacity:1}
 .tool{
@@ -1099,6 +1100,7 @@ img{display:block;max-width:100%}
         <button class="mini-chip" v-if="counts.link" @click="A.toggleExpand(task)" :title="counts.link+' 条链接备注'">🔗 {{ counts.link }}</button>
         <button class="mini-chip" v-if="counts.image" @click="A.toggleExpand(task)" :title="counts.image+' 张图片'">🖼️ {{ counts.image }}</button>
         <span class="meta-warn" v-if="isOverdue">已过期</span>
+        <span class="meta-hit" v-if="noteHit" :title="noteHit">{{ noteHit }}</span>
         <span class="meta-line" v-if="metaText">{{ metaText }}</span>
       </div>
     </div>
@@ -1326,7 +1328,7 @@ img{display:block;max-width:100%}
   var DEVICE_ID = getDeviceId();
   var SCHEMA_VERSION = 2;
   var REGISTRY_KEY = 'chrononoteDevices';
-  var REGISTRY_TTL = 180 * 24 * 3600 * 1000;
+  var REGISTRY_TTL = 365 * 24 * 3600 * 1000;
   function loadRegistry() {
     try {
       var r = JSON.parse(localStorage.getItem(REGISTRY_KEY) || '{}');
@@ -2236,7 +2238,10 @@ img{display:block;max-width:100%}
       });
       var isOverdue = computed(function () {
         var x = props.task;
-        return !x.completed && !!x.targetDate && x.targetDate < S.today;
+        if (x.completed || !x.targetDate) return false;
+        /* 多天任务：只有整个区间都过去了才算逾期，进行中的不算 */
+        var endsAt = x.endDate && x.endDate > x.targetDate ? x.endDate : x.targetDate;
+        return endsAt < S.today;
       });
       var imageNotes = computed(function () {
         return (props.task.notes || []).filter(function (n) { return n.type === 'image'; });
@@ -2266,8 +2271,27 @@ img{display:block;max-width:100%}
         return (t.targetTime || '') + (t.endTime ? '–' + t.endTime : '');
       });
       var metaText = computed(function () { return A.metaHint(props.task); });
+      /* 搜索词只命中备注时，给一行摘录，否则用户看不出为什么这条被搜出来 */
+      var noteHit = computed(function () {
+        var q = String(S.search || '').trim().toLowerCase();
+        if (!q) return '';
+        var t = props.task;
+        if (String(t.title).toLowerCase().indexOf(q) >= 0) return '';
+        for (var i = 0; i < t.notes.length; i++) {
+          var n = t.notes[i];
+          var c = String(n.content || '');
+          var hay = (c + ' ' + (n.title || '')).toLowerCase();
+          if (hay.indexOf(q) < 0) continue;
+          var idx = c.toLowerCase().indexOf(q);
+          var from = idx > 8 ? idx - 8 : 0;
+          var pre = from > 0 ? '…' : '';
+          var icon = n.type === 'link' ? '🔗 ' : (n.type === 'image' ? '🖼️ ' : '📝 ');
+          return icon + pre + c.slice(from, from + 36);
+        }
+        return '';
+      });
       var hasMeta = computed(function () {
-        return !!(counts.value.text || counts.value.link || counts.value.image || isOverdue.value || metaText.value);
+        return !!(counts.value.text || counts.value.link || counts.value.image || isOverdue.value || metaText.value || noteHit.value);
       });
 
       function startEdit() {
@@ -2340,7 +2364,7 @@ img{display:block;max-width:100%}
       return {
         A: A, S: S, t: t, counts: counts, isOverdue: isOverdue, showClock: showClock, showAllday: showAllday,
         showFuzzy: showFuzzy, fuzzyText: fuzzyText, cardClass: cardClass, clockTitle: clockTitle, timeLabel: timeLabel,
-        metaText: metaText, hasMeta: hasMeta, imageNotes: imageNotes,
+        metaText: metaText, hasMeta: hasMeta, imageNotes: imageNotes, noteHit: noteHit,
         expanded: expanded, editing: editing, titleDraft: titleDraft, titleInput: titleInput,
         editId: editId, editText: editText, newText: newText, newUrl: newUrl, newLinkTitle: newLinkTitle,
         mode: mode, fileEl: fileEl,
@@ -2684,25 +2708,24 @@ img{display:block;max-width:100%}
       }
 
       /* ---------- 图片摄入 ---------- */
+      /* 串行处理图片：一次只解码一张，避免批量高清图把内存打爆 */
       function ingestImages(files, cb) {
         if (!files || !files.length) return;
-        var jobs = files.map(function (f) {
-          return compressImage(f, 1200, 0.75).then(function (d) {
-            return makeImageNote(d);
+        var ok = [], failed = 0;
+        function step(i) {
+          if (i >= files.length) {
+            if (failed) toast('有 ' + failed + ' 张图片处理失败', true);
+            if (ok.length) cb(ok);
+            return;
+          }
+          compressImage(files[i], 1200, 0.75).then(function (d) {
+            ok.push(makeImageNote(d));
           }).catch(function (e) {
             console.warn('[ChronoNote] 图片压缩失败', e);
-            return null;
-          });
-        });
-        Promise.all(jobs).then(function (list) {
-          var ok = list.filter(Boolean);
-          var failed = list.length - ok.length;
-          if (failed) toast('有 ' + failed + ' 张图片处理失败', true);
-          if (ok.length) cb(ok);
-        }).catch(function (e) {
-          console.error('[ChronoNote] 图片批量处理失败', e);
-          toast('图片处理失败，请重试', true);
-        });
+            failed++;
+          }).then(function () { step(i + 1); });
+        }
+        step(0);
       }
 
       /* ---------- 灯箱 ---------- */
@@ -3004,7 +3027,13 @@ img{display:block;max-width:100%}
         return S.tasks.filter(function (t) {
           if (t.deleted || !t.completed) return false;
           if (!q) return true;
-          return String(t.title).toLowerCase().indexOf(q) >= 0;
+          if (String(t.title).toLowerCase().indexOf(q) >= 0) return true;
+          /* 已完成的也要能搜到备注内容，和未完成保持一致 */
+          for (var i = 0; i < t.notes.length; i++) {
+            var n = t.notes[i];
+            if (((n.content || '') + ' ' + (n.title || '')).toLowerCase().indexOf(q) >= 0) return true;
+          }
+          return false;
         }).sort(function (a, b) { return b.updatedAt - a.updatedAt; });
       });
 
@@ -3016,6 +3045,8 @@ img{display:block;max-width:100%}
         var map = new Map();
         items.forEach(function (t) {
           var d = t.targetDate || today;
+          /* 进行中的多天任务（开始已过、结束未到）归入"今天"，不再算逾期 */
+          if (t.endDate && d < today && t.endDate >= today) d = today;
           if (!map.has(d)) map.set(d, []);
           map.get(d).push(t);
         });
@@ -3108,12 +3139,17 @@ img{display:block;max-width:100%}
         var total = 0, done = 0, open = 0, overdue = 0;
         S.tasks.forEach(function (t) {
           if (t.deleted) return;
-          var isToday = (t.timeType === 'exact_time' || t.timeType === 'exact_date') && t.targetDate === S.today;
+          var dated = t.timeType === 'exact_time' || t.timeType === 'exact_date';
+          if (!dated || !t.targetDate) return;
+          var endsAt = (t.endDate && t.endDate > t.targetDate) ? t.endDate : t.targetDate;
+          /* 今天：今天开始，或跨天任务仍在进行中 */
+          var isToday = t.targetDate === S.today || (t.targetDate < S.today && endsAt >= S.today);
           if (isToday) {
             total++;
             if (t.completed) done++; else open++;
           }
-          if (!t.completed && t.targetDate && t.targetDate < S.today) overdue++;
+          /* 逾期：整个区间都过去了 */
+          if (!t.completed && endsAt < S.today) overdue++;
         });
         return { total: total, done: done, open: open, overdue: overdue };
       });
@@ -3233,12 +3269,10 @@ img{display:block;max-width:100%}
       function gcAckTombstones(registry) {
         var now = Date.now();
         var others = Object.keys(registry).filter(function (k) { return k !== DEVICE_ID; });
-        var minAck;
-        if (!others.length) {
-          minAck = now - 3600 * 1000;
-        } else {
-          minAck = Math.min.apply(null, others.map(function (k) { return Number(registry[k]) || 0; }));
-        }
+        /* 没有其他已知设备时一律不回收：可能只是注册表没读到（隐私模式/配额满/新装），
+           贸然回收会让另一台离线设备的旧副本复活。需要收缩体积时用「清理删除标记」手动清。 */
+        if (!others.length) return 0;
+        var minAck = Math.min.apply(null, others.map(function (k) { return Number(registry[k]) || 0; }));
         var dropped = 0;
         S.tasks = S.tasks.filter(function (t) {
           if (!t.deleted) return true;
@@ -3286,10 +3320,12 @@ img{display:block;max-width:100%}
         S.sync = { state: 'syncing', at: S.sync.at, message: '正在与 Gist 同步…' };
         var gid = String(S.settings.gistId || '').trim();
         var remoteTasks = null;
+        var pullStamp = '';   /* 拉取时 Gist 的 updated_at，用于 PATCH 前检测并发写入 */
 
         var gistPath = '/gists/' + encodeURIComponent(gid);
         var pull = gid
           ? ghFetch(gistPath).then(function (data) {
+              pullStamp = data.updated_at || '';
               var file = (data.files && (data.files['tasks.json'] || data.files['chrononote.json'])) || null;
               if (!file) throw new Error('Gist 中找不到 tasks.json 或 chrononote.json；为防止覆盖未知数据，已停止同步');
               if (file.truncated || !file.content) {
@@ -3361,9 +3397,31 @@ img{display:block;max-width:100%}
               return created;
             });
           }
-          return ghFetch(gistPath, {
-            method: 'PATCH',
-            body: JSON.stringify({ files: { 'tasks.json': { content: content } } })
+          /* 冲突窗口：GET 之后可能已有别的设备推送过。
+             PATCH 前再读一次云端 updated_at，变了就用最新内容重新合并，再推送。 */
+          return ghFetch(gistPath).then(function (cur) {
+            if (cur && cur.updated_at && pullStamp && cur.updated_at !== pullStamp) {
+              var newer = parseRemotePayload(cur);
+              var merged2 = mergeTasks(S.tasks.slice(), newer.tasks);
+              suppressAutoSync = true;
+              S.tasks = merged2;
+              nextTick(function () { suppressAutoSync = false; });
+              var reg2 = mergeRegistry(loadRegistry(), newer.devices || {});
+              reg2[DEVICE_ID] = Date.now();
+              gcAckTombstones(reg2);
+              saveRegistry(reg2);
+              content = JSON.stringify(syncPayload(S.tasks), null, 2);
+              return db.setItem(DB_KEY, JSON.parse(JSON.stringify(S.tasks))).then(function () {
+                return ghFetch(gistPath, {
+                  method: 'PATCH',
+                  body: JSON.stringify({ files: { 'tasks.json': { content: content } } })
+                });
+              });
+            }
+            return ghFetch(gistPath, {
+              method: 'PATCH',
+              body: JSON.stringify({ files: { 'tasks.json': { content: content } } })
+            });
           });
         }).then(function () {
           S.syncing = false;
@@ -3430,6 +3488,10 @@ img{display:block;max-width:100%}
             var data = JSON.parse(String(reader.result));
             var incoming = parseRemoteTasks(data);
             if (!incoming.length) { toast('文件里没有可导入的事项', true); return; }
+            /* 备份里的设备登记表也要一起恢复，否则墓碑确认状态断裂，可能过早回收 */
+            if (data && typeof data === 'object' && data.devices && typeof data.devices === 'object') {
+              saveRegistry(mergeRegistry(loadRegistry(), data.devices));
+            }
             var merged = mergeTasks(S.tasks.slice(), incoming);
             S.tasks = merged;
             persistNow();
@@ -3592,22 +3654,22 @@ img{display:block;max-width:100%}
           setTimeout(function () { location.reload(); }, 300);
         });
       }
+      /* 返回 'new' | 'same' | 'unknown' | 'skipped'，让调用方能区分「已是最新」与「查不了」 */
       function checkUpdate(force) {
-        if (location.protocol !== 'http:' && location.protocol !== 'https:') return Promise.resolve(false);
+        if (location.protocol !== 'http:' && location.protocol !== 'https:') return Promise.resolve('unknown');
         var now = Date.now();
-        if (!force && now - lastUpdateCheck < 5 * 60000) return Promise.resolve(false);
+        if (!force && now - lastUpdateCheck < 5 * 60000) return Promise.resolve('skipped');
         lastUpdateCheck = now;
         return fetch('./index.html', { method: 'HEAD', cache: 'no-store' })
           .then(function (r) { return r.headers.get('last-modified'); })
           .then(function (lm) {
-            if (!lm) return false;
+            if (!lm) return 'unknown';
             var remote = new Date(lm).getTime();
             var local = new Date(document.lastModified).getTime();
-            if (!remote || !local) return false;
-            if (Math.abs(remote - local) > 3000) { offerUpdate(); return true; }
-            return false;
+            if (!remote || !local) return 'unknown';
+            return Math.abs(remote - local) > 3000 ? 'new' : 'same';
           })
-          .catch(function () { return false; });
+          .catch(function () { return 'unknown'; });
       }
 
       var tickTimer = null;
@@ -3643,7 +3705,9 @@ img{display:block;max-width:100%}
           checkWeek();
           refreshPwa();
           setTimeout(refreshPwa, 2500);
-          setTimeout(function () { checkUpdate(true); }, 4000);
+          setTimeout(function () {
+            checkUpdate(true).then(function (s) { if (s === 'new') offerUpdate(); });
+          }, 4000);
           if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) {
             doSync(true);
           }
@@ -3679,7 +3743,7 @@ img{display:block;max-width:100%}
           if (document.visibilityState === 'visible') {
             refreshNow();
             refreshPwa();
-            checkUpdate(false);
+            checkUpdate(false).then(function (s) { if (s === 'new') offerUpdate(); });
             persistNow();
             return;
           }
@@ -3744,8 +3808,10 @@ img{display:block;max-width:100%}
         wipeAll: wipeAll,
         checkUpdate: function () {
           toast('正在检查更新…');
-          return checkUpdate(true).then(function (hasNew) {
-            if (!hasNew) toast('当前已是最新版本');
+          return checkUpdate(true).then(function (s) {
+            if (s === 'new') { offerUpdate(); return; }
+            if (s === 'same') { toast('当前已是最新版本'); return; }
+            toast('无法检查更新：服务器未返回版本信息（静态托管可忽略）', true);
           });
         },
         refreshPwa: refreshPwa,
@@ -3805,7 +3871,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.5.2', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.6.0', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
