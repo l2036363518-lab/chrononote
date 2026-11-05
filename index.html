@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.4.0
+  ChronoNote · 智能时间流记事与待办 v1.4.1
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
@@ -563,6 +563,14 @@ img{display:block;max-width:100%}
 .input[type=date],.input[type=time]{font-family:var(--mono);font-size:12px}
 .help{font-size:11px;color:var(--faint);line-height:1.6;margin-top:4px}
 .help a{color:var(--indigo);border-bottom:1px solid rgba(79,70,229,.25)}
+.pwa-diag{margin-top:10px;border:1px solid var(--line-soft);border-radius:9px;overflow:hidden;background:#fff}
+.pwa-row{display:flex;align-items:center;gap:8px;padding:6px 9px;font-size:11.5px;border-bottom:1px solid var(--line-soft)}
+.pwa-row:last-child{border-bottom:0}
+.pwa-row span{color:var(--faint);min-width:62px;flex:0 0 auto}
+.pwa-row b{font-weight:600;color:var(--ink-2)}
+.pwa-row b.ok{color:var(--green)}
+.pwa-row b.bad{color:var(--coral)}
+.pwa-actions{display:flex;gap:6px;margin-top:7px}
 .row{display:flex;gap:8px;align-items:center}
 .row > .input{flex:1}
 .kbd{font-family:var(--mono);font-size:10px;background:#F1F5F9;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--muted)}
@@ -976,8 +984,23 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.2 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.4.1 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
+            </div>
+
+            <div class="pwa-diag">
+              <div class="pwa-row"><span>运行方式</span><b :class="S.pwa.display==='standalone'?'ok':''">{{ S.pwa.display === 'standalone' ? '独立应用（已安装）' : '浏览器标签页' }}</b></div>
+              <div class="pwa-row"><span>清单文件</span><b :class="S.pwa.manifest?'ok':'bad'">{{ S.pwa.manifest ? '已挂载' : '未挂载' }}</b></div>
+              <div class="pwa-row"><span>离线缓存</span><b :class="pwaSwTone">{{ pwaSwText }}</b></div>
+            </div>
+            <div class="pwa-actions">
+              <button class="btn btn-sm" @click="A.refreshPwa">重新检测</button>
+              <button class="btn btn-sm" @click="A.hardReload">强制刷新</button>
+            </div>
+            <div class="help" v-if="S.pwa.display !== 'standalone'">
+              「清单文件」未挂载 → 页面还是旧缓存，先点强制刷新；<br>
+              「离线缓存」未启用 → 检查 Chrome 设置里的「精简模式 / 流量节省」是否开启；<br>
+              三项都正常时，Chrome ⋮ 菜单里应出现「安装应用」。
             </div>
           </div>
         </div>
@@ -2282,6 +2305,7 @@ img{display:block;max-width:100%}
       /* ---------- 状态 ---------- */
       var S = reactive({
         ready: false,
+        pwa: { display: 'browser', manifest: false, sw: 'unknown' },
         storageWarning: '',
         tasks: [],
         search: '',
@@ -3368,6 +3392,42 @@ img{display:block;max-width:100%}
       var importEl = ref(null);
       function triggerImport() { if (importEl.value) importEl.value.click(); }
 
+      /* ---------- PWA 状态自检：手机端设置里直接看到卡在哪一环 ---------- */
+      function refreshPwa() {
+        try {
+          var standalone = false;
+          try {
+            standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+          } catch (e) { standalone = false; }
+          S.pwa.display = standalone ? 'standalone' : 'browser';
+          S.pwa.manifest = !!document.querySelector('link[rel="manifest"]');
+          if (!('serviceWorker' in navigator)) { S.pwa.sw = 'unsupported'; return; }
+          if (navigator.serviceWorker.controller) { S.pwa.sw = 'active'; return; }
+          navigator.serviceWorker.getRegistrations().then(function (rs) {
+            S.pwa.sw = (rs && rs.length) ? 'registered' : 'none';
+          }).catch(function () { S.pwa.sw = 'none'; });
+        } catch (e) { S.pwa.sw = 'unknown'; }
+      }
+      function hardReload() {
+        try { location.reload(true); } catch (e) { location.href = location.href; }
+      }
+
+      var pwaSwTextC = computed(function () {
+        var map = {
+          active: '已就绪（可离线）',
+          registered: '已注册，未接管',
+          none: '未启用',
+          unsupported: '浏览器不支持',
+          unknown: '检测中'
+        };
+        return map[S.pwa.sw] || '检测中';
+      });
+      var pwaSwToneC = computed(function () {
+        if (S.pwa.sw === 'active') return 'ok';
+        if (S.pwa.sw === 'none' || S.pwa.sw === 'unsupported') return 'bad';
+        return '';
+      });
+
       var tickTimer = null;
       function refreshNow() {
         var t = isoToday();
@@ -3399,6 +3459,8 @@ img{display:block;max-width:100%}
           S.ready = true;
           if (gcTombstones()) persistNow();
           checkWeek();
+          refreshPwa();
+          setTimeout(refreshPwa, 2500);
           if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) {
             doSync(true);
           }
@@ -3433,6 +3495,7 @@ img{display:block;max-width:100%}
         document.addEventListener('visibilitychange', function () {
           if (document.visibilityState === 'visible') {
             refreshNow();
+            refreshPwa();
             persistNow();
             return;
           }
@@ -3495,6 +3558,8 @@ img{display:block;max-width:100%}
         importJson: importJson,
         triggerImport: triggerImport,
         wipeAll: wipeAll,
+        refreshPwa: refreshPwa,
+        hardReload: hardReload,
         clearSecrets: clearSecrets,
         purgeTombstones: purgeTombstones,
         promoteNextWeek: promoteNextWeek,
@@ -3532,6 +3597,8 @@ img{display:block;max-width:100%}
         fuzzyOrder: FUZZY_ORDER,
         fuzzyMeta: FUZZY_META,
         fuzzyMetaOf: fuzzyMetaOf,
+        pwaSwText: pwaSwTextC,
+        pwaSwTone: pwaSwToneC,
         importEl: importEl
       };
     },
@@ -3548,7 +3615,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.4.0', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.4.1', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
