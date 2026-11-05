@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.5.0
+  ChronoNote · 智能时间流记事与待办 v1.5.1
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
@@ -1537,6 +1537,9 @@ img{display:block;max-width:100%}
     }
     /* 复合日词带来的时段要补上，否则「明晚8点」按 08:00 算 */
     if (hasTime && !period && periodHint) period = periodHint;
+    /* 记录 to24 之前的原始小时与「是否裸小时」，区间补判要用 */
+    var rawHour = hasTime ? hour : null;
+    var bareHour = !!(hasTime && !period);
 
     if (hasTime) {
       hour = to24(hour, period);
@@ -1664,7 +1667,7 @@ img{display:block;max-width:100%}
         var iso7 = y7 + '-' + pad2(mo7) + '-' + pad2(dd7);
         if (!isValidISODate(iso7)) {
           return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
-            title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false };
+            title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false, rawHour: null, bareHour: false };
         }
         dateISO = iso7;
         hasDate = true;
@@ -1680,7 +1683,7 @@ img{display:block;max-width:100%}
         var mo8 = cn2int(m8[1]), dd8 = cn2int(m8[2]);
         if (mo8 == null || dd8 == null || mo8 < 1 || mo8 > 12 || dd8 < 1 || dd8 > 31) {
           return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
-            title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false };
+            title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false, rawHour: null, bareHour: false };
         }
         if (mo8 >= 1 && mo8 <= 12 && dd8 >= 1 && dd8 <= 31) {
           var candISO = null;
@@ -1691,7 +1694,7 @@ img{display:block;max-width:100%}
           }
           if (!candISO) {
             return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
-              title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false };
+              title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false, rawHour: null, bareHour: false };
           }
           dateISO = candISO;
           hasDate = true;
@@ -1724,7 +1727,7 @@ img{display:block;max-width:100%}
     }
 
     /* ---- 1.10 汇总 ---- */
-    var result = { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null, title: '', matched: matchedParts.join(' '), endDate: null, endTime: null, explicitDate: hasDate };
+    var result = { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null, title: '', matched: matchedParts.join(' '), endDate: null, endTime: null, explicitDate: hasDate, rawHour: rawHour, bareHour: bareHour };
 
     if (hasDate) {
       result.targetDate = dateISO;
@@ -1757,8 +1760,11 @@ img{display:block;max-width:100%}
   function tryParseRange(text) {
     var t = String(text || '');
     if (!t) return null;
-    /* 先把 14:00-16:00 的连字符换成「到」，避免与 YYYY-MM-DD 的连字符冲突 */
-    var norm = t.replace(/(\d{1,2})\s*[:：]\s*(\d{2})\s*[-~–—～]\s*(\d{1,2})\s*[:：]\s*(\d{2})/g, '$1:$2 到 $3:$4');
+    /* 先把 14:00-16:00 的连字符换成「到」，避免与 YYYY-MM-DD 的连字符冲突；
+       「2点-4点」「5日-8日」这类口语连字符也一并换成「到」 */
+    var norm = t
+      .replace(/(\d{1,2})\s*[:：]\s*(\d{2})\s*[-~–—～]\s*(\d{1,2})\s*[:：]\s*(\d{2})/g, '$1:$2 到 $3:$4')
+      .replace(/([点时分半刻日号])\s*[-~–—]\s*/g, '$1 到 ');
     if (norm === t && !/(?:到|至|~|～|—|–)/.test(t)) return null;
     var m = /^(.{1,60}?)\s*(?:到|至|~|～|—|–)\s*(.{1,60})$/.exec(norm);
     if (!m) return null;
@@ -1783,6 +1789,24 @@ img{display:block;max-width:100%}
 
     /* 结束时间必须有开始时间承接 */
     if (out.endTime && !out.targetTime) out.endTime = null;
+
+    /* 口语常省略「晚上」：20点到10点 指的是 22:00，而不是次日上午 10 点。
+       若加 12 小时后仍早于开始时刻，则按跨夜处理（23点 → 1点 = 次日 01:00）。
+       只在右半段是「裸小时」（没写早上/晚上）时才做这个补判。 */
+    if (out.endTime && out.targetTime && !out.endDate && right.bareHour && right.rawHour != null) {
+      var sh = Number(out.targetTime.split(':')[0]);
+      var rh = right.rawHour;
+      var em = out.endTime.split(':')[1];
+      if (sh >= 12 && rh >= 1 && rh <= 11) {
+        if (rh + 12 > sh) {
+          out.endTime = pad2(rh + 12) + ':' + em;
+        } else {
+          out.endTime = pad2(rh) + ':' + em;
+          out.endDate = ymd(addDays(parseISO(out.targetDate), 1));
+        }
+      }
+    }
+
     /* 结束日期早于开始日期、或与开始同一天，都不算跨天 */
     if (out.endDate && out.targetDate && out.endDate <= out.targetDate) out.endDate = null;
     if (!out.endTime && !out.endDate) return null;
@@ -1904,7 +1928,8 @@ img{display:block;max-width:100%}
     } else {
       if (endDate && targetDate && endDate <= targetDate) endDate = null;
       if (endTime && !targetTime) endTime = null;
-      if (endTime && targetTime && endTime <= targetTime) endTime = null;
+      /* 只有同一天才比较时刻；跨天区间允许结束时刻早于开始时刻（如 14:00 → 次日 10:00） */
+      if (!endDate && endTime && targetTime && endTime <= targetTime) endTime = null;
       if (!endDate && !endTime) { endDate = null; endTime = null; }
     }
 
@@ -2546,7 +2571,7 @@ img{display:block;max-width:100%}
           t.endDate = shifted ? ymd(shifted) : null;
         }
         if (t.endDate && t.targetDate && t.endDate <= t.targetDate) t.endDate = null;
-        if (t.endTime && (!t.targetTime || t.endTime <= t.targetTime)) t.endTime = null;
+        if (t.endTime && (!t.targetTime || (!t.endDate && t.endTime <= t.targetTime))) t.endTime = null;
         if (!t.endDate && !t.endTime) { t.endDate = null; t.endTime = null; }
         touchTask(t);
       }
@@ -2908,11 +2933,13 @@ img{display:block;max-width:100%}
           var now = Date.now();
           var list = raw.map(function (r) {
             if (!r || typeof r !== 'object') return null;
-            return normalizeTask({
+            var t = normalizeTask({
               title: r.title,
               timeType: r.timeType,
               targetDate: r.targetDate,
               targetTime: r.targetTime,
+              endDate: r.endDate,
+              endTime: r.endTime,
               fuzzyTag: r.fuzzyTag,
               notes: Array.isArray(r.notes) ? r.notes : [],
               completed: false,
@@ -2920,6 +2947,9 @@ img{display:block;max-width:100%}
               createdAt: now,
               updatedAt: now
             });
+            /* AI 建的任务同样要打上本设备与 updateId，否则同毫秒冲突时会落到兜底分支 */
+            if (t) touchTask(t);
+            return t;
           }).filter(Boolean);
 
           if (!list.length) throw new Error('没有识别出任何事项');
@@ -3704,7 +3734,12 @@ img{display:block;max-width:100%}
         importJson: importJson,
         triggerImport: triggerImport,
         wipeAll: wipeAll,
-        checkUpdate: function () { return checkUpdate(true); },
+        checkUpdate: function () {
+          toast('正在检查更新…');
+          return checkUpdate(true).then(function (hasNew) {
+            if (!hasNew) toast('当前已是最新版本');
+          });
+        },
         refreshPwa: refreshPwa,
         hardReload: hardReload,
         clearSecrets: clearSecrets,
@@ -3762,7 +3797,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.5.0', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.5.1', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
