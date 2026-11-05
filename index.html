@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.2.0
+  ChronoNote · 智能时间流记事与待办 v1.2.1
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；仅 deepseekApiKey / githubToken / gistId / lastIsoWeek 存 localStorage
@@ -381,6 +381,12 @@ img{display:block;max-width:100%}
 .t-fuzzy.fz-next_week{color:#7A6A45;background:#FAF7EF;border-color:#EFE7D3}
 .t-fuzzy.fz-this_month{color:#8A6A3A;background:#FAF6EE;border-color:#EDE4D4}
 .t-fuzzy.fz-someday{color:#6B7280;background:#F6F7F9;border-color:#E8EBEF}
+.t-schedule{
+  font-size:10.5px;font-weight:600;color:var(--indigo);background:#F8F9FF;
+  border:1px dashed var(--indigo-line);border-radius:6px;padding:1px 6px;line-height:1.7;
+  flex:0 0 auto;margin-top:1px;transition:.15s;
+}
+.t-schedule:hover{background:#EEF1FF;border-style:solid;border-color:var(--indigo)}
 .task-meta{display:flex;align-items:center;gap:7px;margin-top:4px;flex-wrap:wrap;min-height:15px}
 .mini-chip{
   display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--muted);
@@ -554,7 +560,7 @@ img{display:block;max-width:100%}
 .modal-foot{display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--line-soft);background:#FCFDFE}
 
 .pop-mask{position:fixed;inset:0;z-index:60}
-.pop{position:fixed;z-index:61;width:268px;max-width:calc(100vw - 20px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh-3);padding:6px;animation:pop .16s var(--ease) both}
+.pop{position:fixed;z-index:61;width:268px;max-width:calc(100vw - 20px);max-height:calc(100dvh - 24px);overflow-y:auto;overscroll-behavior:contain;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh-3);padding:6px;animation:pop .16s var(--ease) both}
 @keyframes pop{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
 .tm-head{font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:5px 7px 6px}
 .tm-item{display:flex;align-items:center;gap:8px;width:100%;padding:6px 7px;border-radius:7px;font-size:12.5px;color:var(--ink-2);transition:.12s}
@@ -1007,6 +1013,7 @@ img{display:block;max-width:100%}
         <button v-else-if="showAllday" class="t-allday" @click="A.openPicker(task, $event)" title="全天事项">全天</button>
         <button v-else-if="showFuzzy" class="t-fuzzy" :class="'fz-'+task.fuzzyTag"
                 @click="A.openPicker(task, $event)">{{ fuzzyText }}</button>
+        <button v-else class="t-schedule" @click="A.openPicker(task, $event)" title="点击安排时间">+ 排期</button>
 
         <input v-if="editing" ref="titleInput" class="title-input" v-model="titleDraft"
                @keydown.enter.prevent="commitTitle" @keydown.esc.stop="cancelTitle" @blur="commitTitle">
@@ -2310,6 +2317,20 @@ img{display:block;max-width:100%}
 
       /* 墓碑回收：已删任务去掉备注；超过 30 天的墓碑物理删除 */
       var TOMBSTONE_TTL = 30 * 24 * 3600 * 1000;
+
+      /* 立即剥离所有墓碑上的 Base64（切后台推送前也要先跑一次，别把大图推上去） */
+      function stripAllDeletedNotes() {
+        var now = Date.now(), changed = false;
+        S.tasks.forEach(function (t) {
+          if (t.deleted && t.notes && t.notes.length) {
+            t.notes = [];
+            t.updatedAt = now;
+            changed = true;
+          }
+        });
+        return changed;
+      }
+
       function gcTombstones() {
         var now = Date.now(), changed = false, keep = [];
         S.tasks.forEach(function (t) {
@@ -2338,6 +2359,8 @@ img{display:block;max-width:100%}
             if (ids.indexOf(t.id) >= 0) { t.deleted = false; t.updatedAt = stamp; }
           });
         });
+        /* 与单条删除一致：过了撤销期就把 Base64 从墓碑上摘掉 */
+        setTimeout(stripAllDeletedNotes, 6500);
       }
       function toggleExpand(t) {
         var i = S.expanded.indexOf(t.id);
@@ -2797,6 +2820,10 @@ img{display:block;max-width:100%}
       /* ---------- 元信息 ---------- */
       function metaHint(t) {
         if (t.timeType === 'nodate') return '创建于 ' + fromNow(t.createdAt);
+        /* 过期分组把多个历史日期并在一起，必须标出原定日期才看得懂 */
+        if (t.targetDate && (t.targetDate < S.today || String(S.search || '').trim())) {
+          return fmtMDWeek(t.targetDate);
+        }
         return '';
       }
       function shortDone(t) {
@@ -3121,7 +3148,8 @@ img{display:block;max-width:100%}
             persistNow();
             return;
           }
-          /* 切后台/锁屏：还有没推的改动就立刻静默推一次，避免"手机上记完没传上去" */
+          /* 切后台/锁屏：先把墓碑上的大图摘掉再推，避免把废弃 Base64 传上云 */
+          stripAllDeletedNotes();
           persistNow();
           if (dirtySinceSync &&
               String(S.settings.githubToken || '').trim() &&
@@ -3228,7 +3256,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.2.0', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.2.1', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
