@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.5.1
+  ChronoNote · 智能时间流记事与待办 v1.5.2
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
@@ -1792,19 +1792,27 @@ img{display:block;max-width:100%}
 
     /* 口语常省略「晚上」：20点到10点 指的是 22:00，而不是次日上午 10 点。
        若加 12 小时后仍早于开始时刻，则按跨夜处理（23点 → 1点 = 次日 01:00）。
-       只在右半段是「裸小时」（没写早上/晚上）时才做这个补判。 */
+       只在右半段是「裸小时」（没写早上/晚上）时才做这个补判；
+       比较必须精确到分钟，否则 14:00 到 2点半 会被误判成跨夜。 */
     if (out.endTime && out.targetTime && !out.endDate && right.bareHour && right.rawHour != null) {
-      var sh = Number(out.targetTime.split(':')[0]);
+      var sp = out.targetTime.split(':');
+      var sh = Number(sp[0]), sm = Number(sp[1]) || 0;
       var rh = right.rawHour;
-      var em = out.endTime.split(':')[1];
+      var emStr = out.endTime.split(':')[1];
+      var em = Number(emStr) || 0;
       if (sh >= 12 && rh >= 1 && rh <= 11) {
-        if (rh + 12 > sh) {
-          out.endTime = pad2(rh + 12) + ':' + em;
+        if ((rh + 12) * 60 + em > sh * 60 + sm) {
+          out.endTime = pad2(rh + 12) + ':' + emStr;
         } else {
-          out.endTime = pad2(rh) + ':' + em;
+          out.endTime = pad2(rh) + ':' + emStr;
           out.endDate = ymd(addDays(parseISO(out.targetDate), 1));
         }
       }
+    }
+
+    /* 同一天且结束不晚于开始（如 14:00-12:00）→ 直接丢弃结束时刻，和入库校验保持一致 */
+    if (!out.endDate && out.endTime && out.targetTime && out.endTime <= out.targetTime) {
+      out.endTime = null;
     }
 
     /* 结束日期早于开始日期、或与开始同一天，都不算跨天 */
@@ -3797,7 +3805,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.5.1', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.5.2', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
