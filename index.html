@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.4.1
+  ChronoNote · 智能时间流记事与待办 v1.5.0
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
@@ -19,9 +19,21 @@
 <meta name="format-detection" content="telephone=no">
 <meta name="description" content="ChronoNote · 智能时间流记事与待办，本地优先、GitHub Gist 同步。">
 <link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
 <link rel="apple-touch-icon" href="./icons/icon-180.png">
 <meta name="application-name" content="ChronoNote">
 <title>ChronoNote · 智能时间流</title>
+<script>
+  /* ?plain=1：主动摘掉 manifest，让 Chrome 退回「添加到主屏幕」的本地快捷方式。
+     WebAPK 铸包依赖 Google 服务器，国内网络不可达时会卡在"正在安装"。 */
+  (function () {
+    if (!/[?&]plain=1(?:&|$)/.test(location.search)) return;
+    var ml = document.querySelector('link[rel="manifest"]');
+    if (ml && ml.parentNode) ml.parentNode.removeChild(ml);
+    document.documentElement.setAttribute('data-plain-shortcut', '1');
+    window.__CHRONO_PLAIN = true;
+  })();
+</script>
 
 <!-- ===== 依赖（全部 CDN，带备用源） ===== -->
 <script src="https://cdn.tailwindcss.com"></script>
@@ -984,20 +996,24 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.4.1 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.5 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
             <div class="pwa-diag">
               <div class="pwa-row"><span>运行方式</span><b :class="S.pwa.display==='standalone'?'ok':''">{{ S.pwa.display === 'standalone' ? '独立应用（已安装）' : '浏览器标签页' }}</b></div>
-              <div class="pwa-row"><span>清单文件</span><b :class="S.pwa.manifest?'ok':'bad'">{{ S.pwa.manifest ? '已挂载' : '未挂载' }}</b></div>
+              <div class="pwa-row"><span>清单文件</span><b :class="S.pwa.plain ? '' : (S.pwa.manifest?'ok':'bad')">{{ S.pwa.plain ? '已关闭（快捷方式模式）' : (S.pwa.manifest ? '已挂载' : '未挂载') }}</b></div>
               <div class="pwa-row"><span>离线缓存</span><b :class="pwaSwTone">{{ pwaSwText }}</b></div>
             </div>
             <div class="pwa-actions">
               <button class="btn btn-sm" @click="A.refreshPwa">重新检测</button>
               <button class="btn btn-sm" @click="A.hardReload">强制刷新</button>
+              <button class="btn btn-sm" @click="A.checkUpdate">检查新版</button>
             </div>
-            <div class="help" v-if="S.pwa.display !== 'standalone'">
+            <div class="help" v-if="S.pwa.plain">
+              当前是**快捷方式模式**（网址带 <span class="kbd">?plain=1</span>）：不会安装成独立应用，但功能完整、可离线。想要独立窗口，请去掉 <span class="kbd">?plain=1</span> 后在能访问 Google 的网络下点「安装应用」。
+            </div>
+            <div class="help" v-else-if="S.pwa.display !== 'standalone'">
               「清单文件」未挂载 → 页面还是旧缓存，先点强制刷新；<br>
               「离线缓存」未启用 → 检查 Chrome 设置里的「精简模式 / 流量节省」是否开启；<br>
               三项都正常时，Chrome ⋮ 菜单里应出现「安装应用」。
@@ -1067,7 +1083,7 @@ img{display:block;max-width:100%}
     <div class="task-body">
       <div class="task-title-row">
         <button v-if="showClock" class="t-time" :class="{overdue:isOverdue, done:task.completed}"
-                @click="A.openPicker(task, $event)" :title="clockTitle">{{ task.targetTime }}</button>
+                @click="A.openPicker(task, $event)" :title="clockTitle">{{ timeLabel }}</button>
         <button v-else-if="showAllday" class="t-allday" @click="A.openPicker(task, $event)" title="全天事项">全天</button>
         <button v-else-if="showFuzzy" class="t-fuzzy" :class="'fz-'+task.fuzzyTag"
                 @click="A.openPicker(task, $event)">{{ fuzzyText }}</button>
@@ -1458,8 +1474,13 @@ img{display:block;max-width:100%}
    * 解析一段中文文本中的时间表达。
    * @returns {{timeType:string,targetDate:string|null,targetTime:string|null,fuzzyTag:string|null,title:string,matched:string}}
    */
-  function parseNatural(raw) {
+  function parseNatural(raw, depth) {
     var text = String(raw == null ? '' : raw);
+    /* 区间任务：先尝试「A 到 B」拆分，拆不出就按单个时间解析 */
+    if (!depth) {
+      var ranged = tryParseRange(text);
+      if (ranged) return ranged;
+    }
     var originalText = text;
     var now = new Date();
     var today = startOfDay(now);
@@ -1643,7 +1664,7 @@ img{display:block;max-width:100%}
         var iso7 = y7 + '-' + pad2(mo7) + '-' + pad2(dd7);
         if (!isValidISODate(iso7)) {
           return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
-            title: cleanTitle(originalText), matched: '' };
+            title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false };
         }
         dateISO = iso7;
         hasDate = true;
@@ -1659,7 +1680,7 @@ img{display:block;max-width:100%}
         var mo8 = cn2int(m8[1]), dd8 = cn2int(m8[2]);
         if (mo8 == null || dd8 == null || mo8 < 1 || mo8 > 12 || dd8 < 1 || dd8 > 31) {
           return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
-            title: cleanTitle(originalText), matched: '' };
+            title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false };
         }
         if (mo8 >= 1 && mo8 <= 12 && dd8 >= 1 && dd8 <= 31) {
           var candISO = null;
@@ -1670,7 +1691,7 @@ img{display:block;max-width:100%}
           }
           if (!candISO) {
             return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
-              title: cleanTitle(originalText), matched: '' };
+              title: cleanTitle(originalText), matched: '', endDate: null, endTime: null, explicitDate: false };
           }
           dateISO = candISO;
           hasDate = true;
@@ -1703,7 +1724,7 @@ img{display:block;max-width:100%}
     }
 
     /* ---- 1.10 汇总 ---- */
-    var result = { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null, title: '', matched: matchedParts.join(' ') };
+    var result = { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null, title: '', matched: matchedParts.join(' '), endDate: null, endTime: null, explicitDate: hasDate };
 
     if (hasDate) {
       result.targetDate = dateISO;
@@ -1727,6 +1748,45 @@ img{display:block;max-width:100%}
 
     result.title = cleanTitle(text);
     return result;
+  }
+
+  /**
+   * 区间任务：明天下午2点到4点 / 3月5日到3月8日 / 14:00-16:00。
+   * 只有左右两边都能解析出确切日期或时间时才认定为区间，否则退回普通解析。
+   */
+  function tryParseRange(text) {
+    var t = String(text || '');
+    if (!t) return null;
+    /* 先把 14:00-16:00 的连字符换成「到」，避免与 YYYY-MM-DD 的连字符冲突 */
+    var norm = t.replace(/(\d{1,2})\s*[:：]\s*(\d{2})\s*[-~–—～]\s*(\d{1,2})\s*[:：]\s*(\d{2})/g, '$1:$2 到 $3:$4');
+    if (norm === t && !/(?:到|至|~|～|—|–)/.test(t)) return null;
+    var m = /^(.{1,60}?)\s*(?:到|至|~|～|—|–)\s*(.{1,60})$/.exec(norm);
+    if (!m) return null;
+
+    var left = parseNatural(m[1], 1);
+    var right = parseNatural(m[2], 1);
+    var L = left.timeType, R = right.timeType;
+    if ((L !== 'exact_time' && L !== 'exact_date') || (R !== 'exact_time' && R !== 'exact_date')) return null;
+    if (!left.targetDate) return null;
+
+    var out = {
+      timeType: L === 'exact_time' ? 'exact_time' : 'exact_date',
+      targetDate: left.targetDate,
+      targetTime: L === 'exact_time' ? left.targetTime : null,
+      endDate: right.explicitDate ? right.targetDate : null,
+      endTime: R === 'exact_time' ? right.targetTime : null,
+      fuzzyTag: null,
+      explicitDate: true,
+      matched: (left.matched + ' ' + right.matched).trim(),
+      title: cleanTitle((left.title || '') + ' ' + (right.title || ''))
+    };
+
+    /* 结束时间必须有开始时间承接 */
+    if (out.endTime && !out.targetTime) out.endTime = null;
+    /* 结束日期早于开始日期、或与开始同一天，都不算跨天 */
+    if (out.endDate && out.targetDate && out.endDate <= out.targetDate) out.endDate = null;
+    if (!out.endTime && !out.endDate) return null;
+    return out;
   }
 
   /* ---- 拆解「正文 // 备注」并提取链接 ---- */
@@ -1760,14 +1820,16 @@ img{display:block;max-width:100%}
     var diff = dayDiff(d, todayISO);
     var rel = diff === 0 ? '今天' : (diff === 1 ? '明天' : (diff === 2 ? '后天' : (diff < 0 ? '已过期 ' + (-diff) + ' 天' : '还有 ' + diff + ' 天')));
     if (t.timeType === 'exact_time') {
+      var label = d + ' ' + (t.targetTime || '00:00') + (t.endTime ? '–' + t.endTime : '') + (t.endDate ? ' → ' + t.endDate : '');
       return {
-        empty: false, emoji: '⏰', label: d + ' ' + (t.targetTime || '00:00'),
-        tag: '精确时间', tone: diff < 0 ? 'coral' : 'indigo', rel: rel
+        empty: false, emoji: '⏰', label: label,
+        tag: (t.endTime || t.endDate) ? '时间区间' : '精确时间', tone: diff < 0 ? 'coral' : 'indigo', rel: rel
       };
     }
     return {
-      empty: false, emoji: '📅', label: d + ' · 全天',
-      tag: '精确日期', tone: diff < 0 ? 'coral' : 'indigo', rel: rel
+      empty: false, emoji: '📅',
+      label: t.endDate ? (d + ' → ' + t.endDate) : (d + ' · 全天'),
+      tag: t.endDate ? '多天区间' : '精确日期', tone: diff < 0 ? 'coral' : 'indigo', rel: rel
     };
   }
 
@@ -1807,6 +1869,11 @@ img{display:block;max-width:100%}
     var targetDate = isValidISODate(rawDate) ? rawDate : null;
     var rawTime = String(raw.targetTime || '');
     var targetTime = isValidTime(rawTime) ? (pad2(Number(rawTime.split(':')[0])) + ':' + rawTime.split(':')[1]) : null;
+    /* 区间：结束日期 / 结束时间（可选，老数据的 undefined 视为没有） */
+    var rawEndDate = String(raw.endDate || '');
+    var endDate = isValidISODate(rawEndDate) ? rawEndDate : null;
+    var rawEndTime = String(raw.endTime || '');
+    var endTime = isValidTime(rawEndTime) ? (pad2(Number(rawEndTime.split(':')[0])) + ':' + rawEndTime.split(':')[1]) : null;
     /* 前向兼容：只校验形状，不校验取值。别的设备写入的新档位原样保留 */
     var rawFuzzy = String(raw.fuzzyTag == null ? '' : raw.fuzzyTag).trim().toLowerCase();
     var fuzzyTag = /^[a-z0-9_]{1,32}$/.test(rawFuzzy) ? rawFuzzy : null;
@@ -1830,6 +1897,17 @@ img{display:block;max-width:100%}
     }
     if (timeType !== 'fuzzy') fuzzyTag = null;
 
+    /* 区间合法性：必须有开始；结束早于开始或同日则丢弃；结束时间需要开始时间承接 */
+    if (timeType !== 'exact_time' && timeType !== 'exact_date') {
+      endDate = null;
+      endTime = null;
+    } else {
+      if (endDate && targetDate && endDate <= targetDate) endDate = null;
+      if (endTime && !targetTime) endTime = null;
+      if (endTime && targetTime && endTime <= targetTime) endTime = null;
+      if (!endDate && !endTime) { endDate = null; endTime = null; }
+    }
+
     var notes = [];
     if (Array.isArray(raw.notes)) {
       raw.notes.forEach(function (n) { var x = normalizeNote(n); if (x) notes.push(x); });
@@ -1841,6 +1919,8 @@ img{display:block;max-width:100%}
       timeType: timeType,
       targetDate: targetDate,
       targetTime: targetTime,
+      endDate: endDate,
+      endTime: endTime,
       fuzzyTag: fuzzyTag,
       completed: !!raw.completed,
       deleted: !!raw.deleted,
@@ -1865,6 +1945,8 @@ img{display:block;max-width:100%}
       timeType: time && time.timeType ? time.timeType : 'nodate',
       targetDate: time ? time.targetDate : null,
       targetTime: time ? time.targetTime : null,
+      endDate: time ? time.endDate : null,
+      endTime: time ? time.endTime : null,
       fuzzyTag: time ? time.fuzzyTag : null,
       completed: false,
       deleted: false,
@@ -2142,7 +2224,13 @@ img{display:block;max-width:100%}
         };
       });
       var clockTitle = computed(function () {
-        return '时间：' + (props.task.targetDate || '') + ' ' + (props.task.targetTime || '') + '（点击改期）';
+        var t = props.task;
+        return '时间：' + (t.targetDate || '') + ' ' + (t.targetTime || '') +
+          (t.endTime ? '–' + t.endTime : '') + (t.endDate ? ' 至 ' + t.endDate : '') + '（点击改期）';
+      });
+      var timeLabel = computed(function () {
+        var t = props.task;
+        return (t.targetTime || '') + (t.endTime ? '–' + t.endTime : '');
       });
       var metaText = computed(function () { return A.metaHint(props.task); });
       var hasMeta = computed(function () {
@@ -2218,7 +2306,7 @@ img{display:block;max-width:100%}
       }
       return {
         A: A, S: S, t: t, counts: counts, isOverdue: isOverdue, showClock: showClock, showAllday: showAllday,
-        showFuzzy: showFuzzy, fuzzyText: fuzzyText, cardClass: cardClass, clockTitle: clockTitle,
+        showFuzzy: showFuzzy, fuzzyText: fuzzyText, cardClass: cardClass, clockTitle: clockTitle, timeLabel: timeLabel,
         metaText: metaText, hasMeta: hasMeta, imageNotes: imageNotes,
         expanded: expanded, editing: editing, titleDraft: titleDraft, titleInput: titleInput,
         editId: editId, editText: editText, newText: newText, newUrl: newUrl, newLinkTitle: newLinkTitle,
@@ -2305,7 +2393,7 @@ img{display:block;max-width:100%}
       /* ---------- 状态 ---------- */
       var S = reactive({
         ready: false,
-        pwa: { display: 'browser', manifest: false, sw: 'unknown' },
+        pwa: { display: 'browser', manifest: false, sw: 'unknown', plain: false },
         storageWarning: '',
         tasks: [],
         search: '',
@@ -2431,11 +2519,14 @@ img{display:block;max-width:100%}
         if (payload.timeType === 'exact_time' && !isValidTime(String(payload.targetTime || ''))) {
           toast('时间无效，请重新选择', true); return;
         }
+        var oldDate = t.targetDate;
         if (payload.timeType === 'nodate') {
           t.timeType = 'nodate'; t.targetDate = null; t.targetTime = null; t.fuzzyTag = null;
+          t.endDate = null; t.endTime = null;
         } else if (payload.timeType === 'fuzzy') {
           t.timeType = 'fuzzy'; t.fuzzyTag = payload.fuzzyTag || 'someday';
           t.targetDate = null; t.targetTime = null;
+          t.endDate = null; t.endTime = null;
         } else if (payload.timeType === 'exact_time') {
           t.timeType = 'exact_time';
           t.targetDate = payload.targetDate || isoToday();
@@ -2445,8 +2536,18 @@ img{display:block;max-width:100%}
           t.timeType = 'exact_date';
           t.targetDate = payload.targetDate || isoToday();
           t.targetTime = null;
+          t.endTime = null;
           t.fuzzyTag = null;
         }
+        /* 改期时把跨天区间的结束日按同样的天数平移，避免区间被悄悄截断 */
+        if (t.endDate && oldDate && t.targetDate && oldDate !== t.targetDate) {
+          var delta = dayDiff(t.targetDate, oldDate);
+          var shifted = addDays(parseISO(t.endDate), delta);
+          t.endDate = shifted ? ymd(shifted) : null;
+        }
+        if (t.endDate && t.targetDate && t.endDate <= t.targetDate) t.endDate = null;
+        if (t.endTime && (!t.targetTime || t.endTime <= t.targetTime)) t.endTime = null;
+        if (!t.endDate && !t.endTime) { t.endDate = null; t.endTime = null; }
         touchTask(t);
       }
 
@@ -2714,6 +2815,8 @@ img{display:block;max-width:100%}
           '- timeType: "exact_time" | "exact_date" | "fuzzy" | "nodate"',
           '- targetDate: "YYYY-MM-DD" 或 null（exact_time / exact_date 必填）',
           '- targetTime: "HH:mm" 24小时制 或 null（仅 exact_time 必填）',
+          '- endDate: "YYYY-MM-DD" 或 null（只有跨天区间才填，必须晚于 targetDate）',
+          '- endTime: "HH:mm" 24小时制 或 null（只有当天时段区间才填，必须晚于 targetTime）',
           '- fuzzyTag: "three_days" | "this_week" | "next_week" | "two_weeks" | "this_month" | "next_month" | "this_year" | "someday" | null（仅 fuzzy 必填）',
           '- notes: 数组，元素为 {"type":"text"|"link","content":"...","title":"可选，域名或说明"}',
           '',
@@ -2722,8 +2825,9 @@ img{display:block;max-width:100%}
           '2. 相对时间必须相对上面的“今天”换算；"下午3点半"→"15:30"，"晚上8点"→"20:00"。',
           '3. 多件事必须拆成多个任务，每件事一条，不要合并。',
           '4. 没有时间信息的用 nodate；只有模糊时间时用 fuzzy，档位对应：这三天内→three_days，本周/这周→this_week，下周→next_week，两周内/半个月内→two_weeks，本月/月底→this_month，下个月→next_month，今年内/年底前→this_year，没空具体说→someday。',
-          '5. 不要输出 id、createdAt、updatedAt、completed、deleted，这些由前端补齐。',
-          '6. 不要编造用户没说过的事情，notes 里不要放 title 之外的时间词。'
+          '5. 区间任务（"14:00 到 16:00"、"3月5日到3月8日"、"周一到周三"）要拆成开始与结束：开始放 targetDate/targetTime，结束放 endDate/endTime；单点任务 endDate 与 endTime 都为 null。',
+          '6. 不要输出 id、createdAt、updatedAt、completed、deleted，这些由前端补齐。',
+          '7. 不要编造用户没说过的事情，notes 里不要放 title 之外的时间词。'
         ].join('\n');
       }
 
@@ -3005,6 +3109,11 @@ img{display:block;max-width:100%}
       /* ---------- 元信息 ---------- */
       function metaHint(t) {
         if (t.timeType === 'nodate') return '创建于 ' + fromNow(t.createdAt);
+        /* 跨天区间：始终标出结束日，否则看不出这件事压了几天 */
+        if (t.endDate) {
+          var days = dayDiff(t.endDate, t.targetDate) + 1;
+          return '至 ' + fmtMDWeek(t.endDate) + (days > 1 ? ' · 共 ' + days + ' 天' : '');
+        }
         /* 过期分组把多个历史日期并在一起，必须标出原定日期才看得懂 */
         if (t.targetDate && (t.targetDate < S.today || String(S.search || '').trim())) {
           return fmtMDWeek(t.targetDate);
@@ -3400,6 +3509,7 @@ img{display:block;max-width:100%}
             standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
           } catch (e) { standalone = false; }
           S.pwa.display = standalone ? 'standalone' : 'browser';
+          S.pwa.plain = !!window.__CHRONO_PLAIN;
           S.pwa.manifest = !!document.querySelector('link[rel="manifest"]');
           if (!('serviceWorker' in navigator)) { S.pwa.sw = 'unsupported'; return; }
           if (navigator.serviceWorker.controller) { S.pwa.sw = 'active'; return; }
@@ -3427,6 +3537,40 @@ img{display:block;max-width:100%}
         if (S.pwa.sw === 'none' || S.pwa.sw === 'unsupported') return 'bad';
         return '';
       });
+
+      /* ---------- 版本更新检测：所有端（含安装版 App）都能拿到新版本 ---------- */
+      var updateOffered = false, lastUpdateCheck = 0;
+      function offerUpdate() {
+        if (updateOffered) return;
+        updateOffered = true;
+        toast('发现新版本，可立即更新', false, '更新', function () {
+          try {
+            if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+              navigator.serviceWorker.getRegistrations().then(function (rs) {
+                rs.forEach(function (r) { try { r.update(); } catch (e) {} });
+              });
+            }
+          } catch (e) { /* ignore */ }
+          setTimeout(function () { location.reload(); }, 300);
+        });
+      }
+      function checkUpdate(force) {
+        if (location.protocol !== 'http:' && location.protocol !== 'https:') return Promise.resolve(false);
+        var now = Date.now();
+        if (!force && now - lastUpdateCheck < 5 * 60000) return Promise.resolve(false);
+        lastUpdateCheck = now;
+        return fetch('./index.html', { method: 'HEAD', cache: 'no-store' })
+          .then(function (r) { return r.headers.get('last-modified'); })
+          .then(function (lm) {
+            if (!lm) return false;
+            var remote = new Date(lm).getTime();
+            var local = new Date(document.lastModified).getTime();
+            if (!remote || !local) return false;
+            if (Math.abs(remote - local) > 3000) { offerUpdate(); return true; }
+            return false;
+          })
+          .catch(function () { return false; });
+      }
 
       var tickTimer = null;
       function refreshNow() {
@@ -3461,6 +3605,7 @@ img{display:block;max-width:100%}
           checkWeek();
           refreshPwa();
           setTimeout(refreshPwa, 2500);
+          setTimeout(function () { checkUpdate(true); }, 4000);
           if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) {
             doSync(true);
           }
@@ -3496,6 +3641,7 @@ img{display:block;max-width:100%}
           if (document.visibilityState === 'visible') {
             refreshNow();
             refreshPwa();
+            checkUpdate(false);
             persistNow();
             return;
           }
@@ -3558,6 +3704,7 @@ img{display:block;max-width:100%}
         importJson: importJson,
         triggerImport: triggerImport,
         wipeAll: wipeAll,
+        checkUpdate: function () { return checkUpdate(true); },
         refreshPwa: refreshPwa,
         hardReload: hardReload,
         clearSecrets: clearSecrets,
@@ -3615,7 +3762,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.4.1', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.5.0', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>

@@ -3,7 +3,7 @@
  * 静态资源（含 CDN）走「缓存优先 + 运行时写入」——断网也能打开。
  * 改版时请同步修改 CACHE 常量，旧缓存会在 activate 时清掉。
  */
-const CACHE = 'chrononote-v1.4.1';
+const CACHE = 'chrononote-v1.5.0';
 const PRECACHE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
