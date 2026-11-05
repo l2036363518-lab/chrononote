@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.6.0
+  ChronoNote · 智能时间流记事与待办 v1.6.1
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
@@ -36,7 +36,7 @@
 </script>
 
 <!-- ===== 依赖（全部 CDN，带备用源） ===== -->
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
 <script>
   try {
     window.tailwind && (tailwind.config = {
@@ -3263,23 +3263,44 @@ img{display:block;max-width:100%}
       }
 
       /**
-       * 设备确认式墓碑回收：仅当「所有已知设备都在该删除之后同步过」才物理删除墓碑。
-       * 冷启动不执行，只在真正拉取到云端元数据后执行。
+       * 从 GitHub Gist 的接口响应里取出并解析负载。
+       * 注意：响应本身不是负载，真正的 JSON 在 files['tasks.json'].content 里；
+       * 内容被截断时走 raw_url（并校验域名）。
        */
-      function gcAckTombstones(registry) {
-        var now = Date.now();
-        var others = Object.keys(registry).filter(function (k) { return k !== DEVICE_ID; });
-        /* 没有其他已知设备时一律不回收：可能只是注册表没读到（隐私模式/配额满/新装），
-           贸然回收会让另一台离线设备的旧副本复活。需要收缩体积时用「清理删除标记」手动清。 */
-        if (!others.length) return 0;
-        var minAck = Math.min.apply(null, others.map(function (k) { return Number(registry[k]) || 0; }));
-        var dropped = 0;
-        S.tasks = S.tasks.filter(function (t) {
-          if (!t.deleted) return true;
-          if ((Number(t.updatedAt) || 0) < minAck) { dropped++; return false; }
-          return true;
-        });
-        return dropped;
+      function readGistPayload(data, token) {
+        var file = (data && data.files && (data.files['tasks.json'] || data.files['chrononote.json'])) || null;
+        if (!file) throw new Error('Gist 中找不到 tasks.json 或 chrononote.json；为防止覆盖未知数据，已停止同步');
+        if (file.truncated || !file.content) {
+          if (!file.raw_url) throw new Error('Gist 文件内容被截断且没有 raw_url，已停止同步以防数据丢失');
+          var rawUrl;
+          try { rawUrl = new URL(file.raw_url); } catch (e) { throw new Error('Gist 原始文件地址无效'); }
+          if (rawUrl.protocol !== 'https:' || rawUrl.hostname !== 'gist.githubusercontent.com') {
+            throw new Error('Gist 原始文件域名不可信，已停止同步');
+          }
+          return fetch(rawUrl.href, {
+            headers: {
+              'Accept': 'application/vnd.github.raw+json',
+              'Authorization': 'Bearer ' + token
+            }
+          }).then(function (r) {
+            if (!r.ok) throw new Error('读取 Gist 原始文件失败（HTTP ' + r.status + '）');
+            return r.text();
+          }).then(function (txt) {
+            return parseRemotePayload(JSON.parse(txt));
+          });
+        }
+        return Promise.resolve(parseRemotePayload(JSON.parse(file.content)));
+      }
+
+      /**
+       * 自动墓碑回收已停用（v1.6.1）。
+       * 任何「某设备很久没出现」的判据都可能误伤：设备只是长期离线、registry 也可能读不到。
+       * 一旦提前删掉墓碑，该设备回来时旧任务就会复活。
+       * 墓碑体积已经很小（备注被剥离），需要收缩时用 设置 → 数据 →「清理删除标记」手动执行，
+       * 由用户自己判断「所有设备都同步过」。
+       */
+      function gcAckTombstones() {
+        return 0;
       }
 
       /** 按 updatedAt、设备 ID、操作 ID 确定顺序；完全相同才比较删除态与备注数量。 */
@@ -3326,28 +3347,7 @@ img{display:block;max-width:100%}
         var pull = gid
           ? ghFetch(gistPath).then(function (data) {
               pullStamp = data.updated_at || '';
-              var file = (data.files && (data.files['tasks.json'] || data.files['chrononote.json'])) || null;
-              if (!file) throw new Error('Gist 中找不到 tasks.json 或 chrononote.json；为防止覆盖未知数据，已停止同步');
-              if (file.truncated || !file.content) {
-                if (!file.raw_url) throw new Error('Gist 文件内容被截断且没有 raw_url，已停止同步以防数据丢失');
-                var rawUrl;
-                try { rawUrl = new URL(file.raw_url); } catch (e) { throw new Error('Gist 原始文件地址无效'); }
-                if (rawUrl.protocol !== 'https:' || rawUrl.hostname !== 'gist.githubusercontent.com') {
-                  throw new Error('Gist 原始文件域名不可信，已停止同步');
-                }
-                return fetch(rawUrl.href, {
-                  headers: {
-                    'Accept': 'application/vnd.github.raw+json',
-                    'Authorization': 'Bearer ' + token
-                  }
-                }).then(function (r) {
-                  if (!r.ok) throw new Error('读取 Gist 原始文件失败（HTTP ' + r.status + '）');
-                  return r.text();
-                }).then(function (txt) {
-                  return parseRemotePayload(JSON.parse(txt));
-                });
-              }
-              return parseRemotePayload(JSON.parse(file.content));
+              return readGistPayload(data, token);
             })
           : Promise.resolve(null);
         pull = pull.then(function (p) {
@@ -3398,23 +3398,24 @@ img{display:block;max-width:100%}
             });
           }
           /* 冲突窗口：GET 之后可能已有别的设备推送过。
-             PATCH 前再读一次云端 updated_at，变了就用最新内容重新合并，再推送。 */
+             PATCH 前再读一次云端 updated_at，变了就用**解析后的**最新内容重新合并，再推送。 */
           return ghFetch(gistPath).then(function (cur) {
             if (cur && cur.updated_at && pullStamp && cur.updated_at !== pullStamp) {
-              var newer = parseRemotePayload(cur);
-              var merged2 = mergeTasks(S.tasks.slice(), newer.tasks);
-              suppressAutoSync = true;
-              S.tasks = merged2;
-              nextTick(function () { suppressAutoSync = false; });
-              var reg2 = mergeRegistry(loadRegistry(), newer.devices || {});
-              reg2[DEVICE_ID] = Date.now();
-              gcAckTombstones(reg2);
-              saveRegistry(reg2);
-              content = JSON.stringify(syncPayload(S.tasks), null, 2);
-              return db.setItem(DB_KEY, JSON.parse(JSON.stringify(S.tasks))).then(function () {
-                return ghFetch(gistPath, {
-                  method: 'PATCH',
-                  body: JSON.stringify({ files: { 'tasks.json': { content: content } } })
+              return readGistPayload(cur, token).then(function (newer) {
+                var merged2 = mergeTasks(S.tasks.slice(), newer.tasks);
+                suppressAutoSync = true;
+                S.tasks = merged2;
+                nextTick(function () { suppressAutoSync = false; });
+                var reg2 = mergeRegistry(loadRegistry(), newer.devices || {});
+                reg2[DEVICE_ID] = Date.now();
+                gcAckTombstones(reg2);
+                saveRegistry(reg2);
+                var content2 = JSON.stringify(syncPayload(S.tasks), null, 2);
+                return db.setItem(DB_KEY, JSON.parse(JSON.stringify(S.tasks))).then(function () {
+                  return ghFetch(gistPath, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ files: { 'tasks.json': { content: content2 } } })
+                  });
                 });
               });
             }
@@ -3651,7 +3652,7 @@ img{display:block;max-width:100%}
               });
             }
           } catch (e) { /* ignore */ }
-          setTimeout(function () { location.reload(); }, 300);
+          setTimeout(function () { location.reload(); }, 800);
         });
       }
       /* 返回 'new' | 'same' | 'unknown' | 'skipped'，让调用方能区分「已是最新」与「查不了」 */
@@ -3660,7 +3661,7 @@ img{display:block;max-width:100%}
         var now = Date.now();
         if (!force && now - lastUpdateCheck < 5 * 60000) return Promise.resolve('skipped');
         lastUpdateCheck = now;
-        return fetch('./index.html', { method: 'HEAD', cache: 'no-store' })
+        return fetch(location.href, { method: 'HEAD', cache: 'no-store' })
           .then(function (r) { return r.headers.get('last-modified'); })
           .then(function (lm) {
             if (!lm) return 'unknown';
@@ -3871,7 +3872,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.6.0', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.6.1', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
