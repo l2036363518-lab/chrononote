@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.0.0
+  ChronoNote · 智能时间流记事与待办 v1.1.0
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；仅 deepseekApiKey / githubToken / gistId / lastIsoWeek 存 localStorage
@@ -281,6 +281,30 @@ img{display:block;max-width:100%}
 .col-sub{margin-left:auto;font-size:11px;color:var(--faint);white-space:nowrap}
 .col-head .count{margin-left:2px}
 
+/* 今日计划面板 */
+.today-panel{
+  border:1px solid var(--indigo-line);border-radius:var(--r-card);
+  background:linear-gradient(180deg,#FBFCFF,#F6F7FF);
+  box-shadow:0 1px 2px rgba(79,70,229,.05);
+  padding:10px 12px;margin-bottom:14px;
+}
+.tp-top{display:flex;align-items:center;gap:8px}
+.tp-badge{font-size:10.5px;font-weight:600;letter-spacing:.06em;color:var(--indigo);background:#fff;border:1px solid var(--indigo-line);border-radius:999px;padding:1px 7px}
+.tp-date{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.tp-count{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.tp-count b{font-size:14px;color:var(--ink);font-weight:600}
+.tp-bar{height:4px;border-radius:2px;background:#E6E9FB;overflow:hidden;margin:8px 0 6px}
+.tp-bar i{display:block;height:100%;border-radius:2px;background:linear-gradient(90deg,#6366F1,#4F46E5);transition:width .35s var(--ease)}
+.tp-meta{display:flex;gap:10px;font-size:11px;color:var(--faint);margin-bottom:8px}
+.tp-warn{color:var(--coral);font-weight:500}
+.tp-ok{color:var(--green)}
+.tp-add{display:flex;gap:6px}
+.tp-add input{flex:1;min-width:0;height:30px;border:1px solid var(--line);border-radius:8px;padding:0 9px;font-size:12px;background:#fff;transition:.15s}
+.tp-add input:focus{border-color:var(--indigo-line);box-shadow:0 0 0 3px rgba(79,70,229,.08);outline:none}
+.tp-add button{width:30px;height:30px;border-radius:8px;background:var(--indigo);color:#fff;display:grid;place-items:center;flex:0 0 auto;transition:.15s}
+.tp-add button:disabled{background:#E2E8F0;color:#94A3B8;cursor:not-allowed}
+.tp-add button:not(:disabled):hover{background:var(--indigo-600)}
+
 /* 日期分组 */
 .daygroup{margin-bottom:24px}
 .day-head{display:flex;align-items:center;gap:10px;padding:0 2px 8px}
@@ -536,6 +560,9 @@ img{display:block;max-width:100%}
 .tm-item:hover{background:#F5F7FA;color:var(--ink)}
 .tm-item .tm-k{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-left:auto}
 .tm-item .tm-e{font-size:12px;width:16px;text-align:center}
+.tm-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;padding:2px 5px 6px}
+.tm-chip{font-size:11.5px;padding:5px 2px;border-radius:7px;border:1px solid var(--line-soft);background:#FCFDFE;color:var(--ink-2);transition:.14s;white-space:nowrap}
+.tm-chip:hover{border-color:var(--indigo-line);background:#F7F8FF;color:var(--indigo)}
 .tm-sep{height:1px;background:var(--line-soft);margin:5px 4px}
 .tm-custom{padding:6px 7px 4px;border-top:1px solid var(--line-soft);margin-top:4px}
 .tm-custom .row{margin-bottom:6px}
@@ -701,6 +728,26 @@ img{display:block;max-width:100%}
         <span class="col-sub" v-if="G.timeline.length">{{ G.todayLabel }}</span>
       </div>
 
+      <div class="today-panel" v-if="!S.search">
+        <div class="tp-top">
+          <span class="tp-badge">今日计划</span>
+          <span class="tp-date">{{ G.todayLabel }}</span>
+          <span class="tp-count"><b>{{ G.todayStats.done }}</b>/{{ G.todayStats.total }}</span>
+        </div>
+        <div class="tp-bar"><i :style="{width:G.todayPct+'%'}"></i></div>
+        <div class="tp-meta">
+          <span>待办 {{ G.todayStats.open }} 项</span>
+          <span v-if="G.todayStats.overdue" class="tp-warn">逾期 {{ G.todayStats.overdue }} 项</span>
+          <span v-else class="tp-ok">无逾期</span>
+        </div>
+        <div class="tp-add">
+          <input v-model="S.todayDraft" @keydown.enter="A.addToday" placeholder="加到今天，回车即可…" aria-label="添加到今天">
+          <button @click="A.addToday" :disabled="!S.todayDraft.trim()" aria-label="添加">
+            <icon name="plus" :size="12" :stroke="2.6"/>
+          </button>
+        </div>
+      </div>
+
       <div v-if="!G.timeline.length" class="empty">
         <div class="empty-ic">🗓️</div>
         <div class="empty-title">{{ S.search ? '没有匹配的时间轴事项' : '时间轴还很空' }}</div>
@@ -739,11 +786,11 @@ img{display:block;max-width:100%}
         <div class="empty-sub" v-if="!S.search">“下周 洗车”、“本月 整理照片”</div>
       </div>
 
-      <template v-for="k in fuzzyOrder" :key="k">
-      <div class="fz-group" v-if="G.counts.fuzzy">
+      <template v-for="k in G.fuzzyKeys" :key="k">
+      <div class="fz-group" v-if="G.fuzzy[k].length">
         <div class="fz-head">
-          <span class="fz-ic">{{ fuzzyMeta[k].icon }}</span>
-          <h3>{{ fuzzyMeta[k].label }}</h3>
+          <span class="fz-ic">{{ fuzzyMetaOf(k).icon }}</span>
+          <h3>{{ fuzzyMetaOf(k).label }}</h3>
           <span class="count" :class="{'is-zero':!G.fuzzy[k].length}">{{ G.fuzzy[k].length }}</span>
         </div>
         <transition-group name="list" tag="div" class="task-list" v-if="G.fuzzy[k].length">
@@ -885,7 +932,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.0 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.1 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
           </div>
@@ -1153,12 +1200,21 @@ img{display:block;max-width:100%}
   var WEEK_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   var WD_IDX = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 0, '天': 0 };
   var FUZZY_META = {
+    three_days: { label: '三天内', icon: '📍', tone: 'amber' },
     this_week: { label: '本周', icon: '🗓️', tone: 'amber' },
     next_week: { label: '下周', icon: '🌤️', tone: 'amber' },
-    this_month: { label: '本月', icon: '📆', tone: 'amber' },
+    two_weeks: { label: '两周内', icon: '📆', tone: 'amber' },
+    this_month: { label: '本月', icon: '🗓', tone: 'amber' },
+    next_month: { label: '下月', icon: '📅', tone: 'amber' },
+    this_year: { label: '今年内', icon: '🗂️', tone: 'slate' },
     someday: { label: '远期', icon: '💭', tone: 'slate' }
   };
-  var FUZZY_ORDER = ['this_week', 'next_week', 'this_month', 'someday'];
+  /* 只增不改：老数据里的 this_week / next_week / this_month / someday 永远有效 */
+  var FUZZY_ORDER = ['three_days', 'this_week', 'next_week', 'two_weeks', 'this_month', 'next_month', 'this_year', 'someday'];
+  /* 前向兼容：未知档位（别的设备写入的新值）也要能显示，绝不丢 */
+  function fuzzyMetaOf(tag) {
+    return FUZZY_META[tag] || { label: '其他', icon: '🏷️', tone: 'slate' };
+  }
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -1400,21 +1456,25 @@ img{display:block;max-width:100%}
       }
     }
 
-    /* ---- 1.9 模糊时间 ---- */
+    /* ---- 1.9 模糊时间（按紧迫度从近到远依次尝试） ---- */
     if (!hasDate) {
-      var m9 = /(这|本)\s*(?:周|星期|礼拜)/.exec(text);
-      if (m9) { fuzzyTag = 'this_week'; fuzzyHit = m9[0]; text = cut(text, m9.index, m9[0].length); }
-      if (!fuzzyTag) {
-        m9 = /下\s*(?:个)?\s*(?:周|星期|礼拜)/.exec(text);
-        if (m9) { fuzzyTag = 'next_week'; fuzzyHit = m9[0]; text = cut(text, m9.index, m9[0].length); }
-      }
-      if (!fuzzyTag) {
-        m9 = /(?:这个?月|本月|月底|月末)/.exec(text);
-        if (m9) { fuzzyTag = 'this_month'; fuzzyHit = m9[0]; text = cut(text, m9.index, m9[0].length); }
-      }
-      if (!fuzzyTag) {
-        m9 = /(?:近期|最近|以后|往后|有空|改天|将来|未来|远期|下个月|someday)/i.exec(text);
-        if (m9) { fuzzyTag = 'someday'; fuzzyHit = m9[0]; text = cut(text, m9.index, m9[0].length); }
+      var FUZZY_RULES = [
+        ['three_days', /(?:三天内|三天之内|这三天|近三天|这两三天|两三天|3\s*天内)/],
+        ['this_week', /(这|本)\s*(?:周|星期|礼拜)/],
+        ['next_week', /下\s*(?:个)?\s*(?:周|星期|礼拜)/],
+        ['two_weeks', /(?:两周内|两周之内|半个月内|这半个月|半个月|半月内)/],
+        ['this_month', /(?:这个?月|本月|月底|月末)/],
+        ['next_month', /下\s*(?:个)?\s*月/],
+        ['this_year', /(?:今年内|年内|年底前|年底)/],
+        ['someday', /(?:近期|最近|以后|往后|有空|改天|将来|未来|远期|someday)/i]
+      ];
+      for (var fi = 0; fi < FUZZY_RULES.length && !fuzzyTag; fi++) {
+        var hit = FUZZY_RULES[fi][1].exec(text);
+        if (hit) {
+          fuzzyTag = FUZZY_RULES[fi][0];
+          fuzzyHit = hit[0];
+          text = cut(text, hit.index, hit[0].length);
+        }
       }
     }
 
@@ -1469,7 +1529,7 @@ img{display:block;max-width:100%}
       return { empty: true, emoji: '📥', label: '未定期 · 琐事箱', tag: '无日期', tone: 'slate', rel: '' };
     }
     if (t.timeType === 'fuzzy') {
-      var meta = FUZZY_META[t.fuzzyTag] || FUZZY_META.someday;
+      var meta = fuzzyMetaOf(t.fuzzyTag);
       return { empty: false, emoji: meta.icon, label: '大致：' + meta.label, tag: '大致日期', tone: 'amber', rel: meta.label };
     }
     var d = t.targetDate || todayISO;
@@ -1491,7 +1551,6 @@ img{display:block;max-width:100%}
    * 2. 数据规范化（所有入口统一过这道闸）
    * ======================================================================== */
   var VALID_TYPES = ['exact_time', 'exact_date', 'fuzzy', 'nodate'];
-  var VALID_FUZZY = ['this_week', 'next_week', 'this_month', 'someday'];
 
   function normalizeNote(raw) {
     if (!raw) return null;
@@ -1522,7 +1581,9 @@ img{display:block;max-width:100%}
     var timeType = VALID_TYPES.indexOf(raw.timeType) >= 0 ? raw.timeType : null;
     var targetDate = /^\d{4}-\d{2}-\d{2}$/.test(String(raw.targetDate || '')) ? String(raw.targetDate) : null;
     var targetTime = /^\d{1,2}:\d{2}$/.test(String(raw.targetTime || '')) ? String(raw.targetTime) : null;
-    var fuzzyTag = VALID_FUZZY.indexOf(raw.fuzzyTag) >= 0 ? raw.fuzzyTag : null;
+    /* 前向兼容：只校验形状，不校验取值。别的设备写入的新档位原样保留 */
+    var rawFuzzy = String(raw.fuzzyTag == null ? '' : raw.fuzzyTag).trim().toLowerCase();
+    var fuzzyTag = /^[a-z0-9_]{1,32}$/.test(rawFuzzy) ? rawFuzzy : null;
 
     if (!timeType) {
       if (targetDate && targetTime) timeType = 'exact_time';
@@ -1763,6 +1824,7 @@ img{display:block;max-width:100%}
       function applyNone() { emit({ timeType: 'nodate' }); }
       return {
         custom: custom, date: date, time: time, today: today, tomorrow: tomorrow,
+        fuzzyList: FUZZY_ORDER.map(function (k) { return { tag: k, label: FUZZY_META[k].label }; }),
         applyCustom: applyCustom, applyFuzzy: applyFuzzy, applyNone: applyNone
       };
     },
@@ -1777,10 +1839,10 @@ img{display:block;max-width:100%}
       '    <div class="tm-actions"><button class="btn btn-sm" @click="custom=false">取消</button><button class="btn btn-sm btn-primary" @click="$emit(\'pick\',{timeType:\'exact_time\',targetDate:date,targetTime:time})">确定</button></div>' +
       '  </div>' +
       '  <div class="tm-sep"></div>' +
-      '  <button class="tm-item" @click="applyFuzzy(\'this_week\')"><span class="tm-e">🗓️</span>本周<span class="tm-k">大致</span></button>' +
-      '  <button class="tm-item" @click="applyFuzzy(\'next_week\')"><span class="tm-e">🌤️</span>下周<span class="tm-k">大致</span></button>' +
-      '  <button class="tm-item" @click="applyFuzzy(\'this_month\')"><span class="tm-e">📆</span>本月<span class="tm-k">大致</span></button>' +
-      '  <button class="tm-item" @click="applyFuzzy(\'someday\')"><span class="tm-e">💭</span>远期<span class="tm-k">大致</span></button>' +
+      '  <div class="tm-head">大致时间</div>' +
+      '  <div class="tm-grid">' +
+      '    <button class="tm-chip" v-for="f in fuzzyList" :key="f.tag" @click="applyFuzzy(f.tag)">{{ f.label }}</button>' +
+      '  </div>' +
       '  <div class="tm-sep"></div>' +
       '  <button class="tm-item" @click="applyNone"><span class="tm-e">📥</span>移入琐事箱<span class="tm-k">无日期</span></button>' +
       '</div>'
@@ -1827,8 +1889,7 @@ img{display:block;max-width:100%}
       var showAllday = computed(function () { return props.task.timeType === 'exact_date'; });
       var showFuzzy = computed(function () { return props.task.timeType === 'fuzzy'; });
       var fuzzyText = computed(function () {
-        var meta = FUZZY_META[props.task.fuzzyTag];
-        return meta ? meta.label : '大致';
+        return fuzzyMetaOf(props.task.fuzzyTag).label;
       });
       var cardClass = computed(function () {
         var x = props.task;
@@ -1998,6 +2059,7 @@ img{display:block;max-width:100%}
         today: isoToday(),
         isoWeek: isoWeekKey(new Date()),
         draft: '',
+        todayDraft: '',
         draftImages: [],
         draftOverride: null,
         aiLoading: false,
@@ -2278,6 +2340,24 @@ img{display:block;max-width:100%}
         S.draftOverride = null;
         toast('已添加「' + title.slice(0, 16) + '」' + (task.notes.length ? ' · ' + task.notes.length + ' 条备注' : ''));
       }
+      /* 今日计划面板的快速添加：无时间的落到今天全天，其余尊重识别结果 */
+      function addToday() {
+        var raw = String(S.todayDraft || '').trim();
+        if (!raw) return;
+        var parsed = parseDraft(raw);
+        var time = parsed.time;
+        if (!time || time.timeType === 'nodate') {
+          time = { timeType: 'exact_date', targetDate: S.today };
+        }
+        var notes = [];
+        if (parsed.noteText) notes.push(makeTextNote(parsed.noteText));
+        parsed.links.forEach(function (u) { var n = makeLinkNote(u); if (n) notes.push(n); });
+        var title = parsed.title || '未命名事项';
+        S.tasks.push(makeTask(title, time, notes));
+        S.todayDraft = '';
+        toast('已添加「' + title.slice(0, 16) + '」');
+      }
+
       function removeDraftImage(i) {
         S.draftImages.splice(i, 1);
       }
@@ -2298,14 +2378,14 @@ img{display:block;max-width:100%}
           '- timeType: "exact_time" | "exact_date" | "fuzzy" | "nodate"',
           '- targetDate: "YYYY-MM-DD" 或 null（exact_time / exact_date 必填）',
           '- targetTime: "HH:mm" 24小时制 或 null（仅 exact_time 必填）',
-          '- fuzzyTag: "this_week" | "next_week" | "this_month" | "someday" | null（仅 fuzzy 必填）',
+          '- fuzzyTag: "three_days" | "this_week" | "next_week" | "two_weeks" | "this_month" | "next_month" | "this_year" | "someday" | null（仅 fuzzy 必填）',
           '- notes: 数组，元素为 {"type":"text"|"link","content":"...","title":"可选，域名或说明"}',
           '',
           '规则：',
           '1. " // "（空格+双斜杠+空格）之后的内容是该事项的备注；其中 URL 生成 type=link 备注（title 用域名），其余文字生成 type=text 备注。',
           '2. 相对时间必须相对上面的“今天”换算；"下午3点半"→"15:30"，"晚上8点"→"20:00"。',
           '3. 多件事必须拆成多个任务，每件事一条，不要合并。',
-          '4. 没有时间信息的用 nodate；只有模糊时间（本周/下周/本月/有空）用 fuzzy。',
+          '4. 没有时间信息的用 nodate；只有模糊时间时用 fuzzy，档位对应：这三天内→three_days，本周/这周→this_week，下周→next_week，两周内/半个月内→two_weeks，本月/月底→this_month，下个月→next_month，今年内/年底前→this_year，没空具体说→someday。',
           '5. 不要输出 id、createdAt、updatedAt、completed、deleted，这些由前端补齐。',
           '6. 不要编造用户没说过的事情，notes 里不要放 title 之外的时间词。'
         ].join('\n');
@@ -2507,12 +2587,24 @@ img{display:block;max-width:100%}
         return out;
       });
 
-      var fuzzyG = computed(function () {
-        var g = { this_week: [], next_week: [], this_month: [], someday: [] };
-        activeTasks.value.forEach(function (t) {
-          if (t.timeType === 'fuzzy' && g[t.fuzzyTag]) g[t.fuzzyTag].push(t);
+      var fuzzyKeysG = computed(function () {
+        var keys = FUZZY_ORDER.slice();
+        S.tasks.forEach(function (t) {
+          if (t.deleted || t.completed) return;
+          if (t.timeType === 'fuzzy' && t.fuzzyTag && keys.indexOf(t.fuzzyTag) < 0) keys.push(t.fuzzyTag);
         });
-        FUZZY_ORDER.forEach(function (k) {
+        return keys;
+      });
+
+      var fuzzyG = computed(function () {
+        var g = {};
+        fuzzyKeysG.value.forEach(function (k) { g[k] = []; });
+        activeTasks.value.forEach(function (t) {
+          if (t.timeType !== 'fuzzy' || !t.fuzzyTag) return;
+          if (!g[t.fuzzyTag]) g[t.fuzzyTag] = [];
+          g[t.fuzzyTag].push(t);
+        });
+        Object.keys(g).forEach(function (k) {
           g[k].sort(function (a, b) { return b.createdAt - a.createdAt; });
         });
         return g;
@@ -2528,16 +2620,38 @@ img{display:block;max-width:100%}
         var timeline = 0;
         timelineG.value.forEach(function (g) { timeline += g.items.length; });
         var fuzzy = 0;
-        FUZZY_ORDER.forEach(function (k) { fuzzy += fuzzyG.value[k].length; });
+        Object.keys(fuzzyG.value).forEach(function (k) { fuzzy += fuzzyG.value[k].length; });
         return { timeline: timeline, fuzzy: fuzzy, inbox: inboxG.value.length };
+      });
+
+      var todayStatsG = computed(function () {
+        var total = 0, done = 0, open = 0, overdue = 0;
+        S.tasks.forEach(function (t) {
+          if (t.deleted) return;
+          var isToday = (t.timeType === 'exact_time' || t.timeType === 'exact_date') && t.targetDate === S.today;
+          if (isToday) {
+            total++;
+            if (t.completed) done++; else open++;
+          }
+          if (!t.completed && t.targetDate && t.targetDate < S.today) overdue++;
+        });
+        return { total: total, done: done, open: open, overdue: overdue };
+      });
+
+      var todayPctG = computed(function () {
+        var s = todayStatsG.value;
+        return s.total ? Math.round(s.done / s.total * 100) : 0;
       });
 
       Object.assign(G, {
         timeline: timelineG,
         fuzzy: fuzzyG,
+        fuzzyKeys: fuzzyKeysG,
         inbox: inboxG,
         done: doneTasks,
         counts: countsG,
+        todayStats: todayStatsG,
+        todayPct: todayPctG,
         deletedCount: computed(function () {
           return S.tasks.filter(function (t) { return t.deleted; }).length;
         }),
@@ -2890,6 +3004,7 @@ img{display:block;max-width:100%}
         clearOverride: clearOverride,
         fillDraft: fillDraft,
         send: send,
+        addToday: addToday,
         removeDraftImage: removeDraftImage,
         runAI: runAI,
         metaHint: metaHint,
@@ -2938,6 +3053,7 @@ img{display:block;max-width:100%}
         syncText: syncTextC,
         fuzzyOrder: FUZZY_ORDER,
         fuzzyMeta: FUZZY_META,
+        fuzzyMetaOf: fuzzyMetaOf,
         importEl: importEl
       };
     },
@@ -2954,7 +3070,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.0.0', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.1.0', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
