@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.7.2
+  ChronoNote · 智能时间流记事与待办 v1.7.3
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
@@ -1091,7 +1091,7 @@ img{display:block;max-width:100%}
             <div class="field" v-if="S.prefs.briefOn">
               <label class="label">提醒时间</label>
               <input class="input" type="time" v-model="S.prefs.briefTime" style="max-width:140px">
-              <div class="help">当天第一次打开页面、且已过该时间才弹出；同一台设备每天最多一次。改时间后需刷新页面生效。</div>
+              <div class="help">当天第一次打开页面、且已过该时间才弹出；同一台设备每天最多一次。改完 30 秒内生效，不必刷新。</div>
             </div>
             <div class="row">
               <button class="btn btn-sm" @click="A.previewBrief">立即预览</button>
@@ -1104,7 +1104,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.7.2 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.3 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -2104,6 +2104,7 @@ img{display:block;max-width:100%}
       endTime: endTime,
       fuzzyTag: fuzzyTag,
       completed: !!raw.completed,
+      completedAt: raw.completed && Number(raw.completedAt) ? Number(raw.completedAt) : null,
       deleted: !!raw.deleted,
       createdAt: Number(raw.createdAt) || now,
       updatedAt: Number(raw.updatedAt) || Number(raw.createdAt) || now,
@@ -2456,6 +2457,7 @@ img{display:block;max-width:100%}
         if (String(t.title).toLowerCase().indexOf(q) >= 0) return '';
         for (var i = 0; i < t.notes.length; i++) {
           var n = t.notes[i];
+          if (n.type === 'image') continue;
           var c = String(n.content || '');
           var hay = (c + ' ' + (n.title || '')).toLowerCase();
           if (hay.indexOf(q) < 0) continue;
@@ -2717,6 +2719,9 @@ img{display:block;max-width:100%}
       var suppressAutoSync = false;
       var dirtySinceSync = false;
       function persistNow() {
+        /* 本地库还没读完就落盘 = 拿空数组覆盖用户数据（pagehide / 切后台都会走到这里）。
+           getItem 是异步的，首屏这段时间必须什么都不写。 */
+        if (!S.ready) return Promise.resolve();
         if (S.storageWarning && /读取本地数据库失败|无法识别的记录|数据库格式无法识别/.test(S.storageWarning)) {
           return Promise.resolve();
         }
@@ -2816,10 +2821,11 @@ img{display:block;max-width:100%}
       /* ---------- 任务动作 ---------- */
       function toggleTask(t) {
         t.completed = !t.completed;
+        t.completedAt = t.completed ? Date.now() : null;
         touchTask(t);
         if (t.completed) S.doneOpen = true;
       }
-      function restoreTask(t) { t.completed = false; touchTask(t); }
+      function restoreTask(t) { t.completed = false; t.completedAt = null; touchTask(t); }
       function removeTask(t) {
         if (!t || t.deleted) return;
         t.deleted = true;
@@ -3227,6 +3233,8 @@ img{display:block;max-width:100%}
           if (String(t.title).toLowerCase().indexOf(q) >= 0) return true;
           for (var i = 0; i < t.notes.length; i++) {
             var n = t.notes[i];
+            /* 图片备注的 content 是 Base64 Data URL，参与文本搜索会命中 "image"、也会摘出乱码 */
+            if (n.type === 'image') continue;
             var hay = (n.content || '') + ' ' + (n.title || '');
             if (hay.toLowerCase().indexOf(q) >= 0) return true;
           }
@@ -3243,6 +3251,7 @@ img{display:block;max-width:100%}
           /* 已完成的也要能搜到备注内容，和未完成保持一致 */
           for (var i = 0; i < t.notes.length; i++) {
             var n = t.notes[i];
+            if (n.type === 'image') continue;
             if (((n.content || '') + ' ' + (n.title || '')).toLowerCase().indexOf(q) >= 0) return true;
           }
           return false;
@@ -3346,39 +3355,49 @@ img{display:block;max-width:100%}
       function isDated(t) {
         return (t.timeType === 'exact_time' || t.timeType === 'exact_date') && !!t.targetDate;
       }
-      var todayListG = computed(function () {
-        var out = activeTasks.value.filter(function (t) {
-          if (!isDated(t)) return false;
-          var endsAt = endsAtOf(t);
-          return t.targetDate === S.today || (t.targetDate < S.today && endsAt >= S.today);
-        });
-        return out.sort(function (a, b) {
+      function sortByTime(arr) {
+        return arr.slice().sort(function (a, b) {
           var at = a.timeType === 'exact_time' ? (a.targetTime || '00:00') : '99:99';
           var bt = b.timeType === 'exact_time' ? (b.targetTime || '00:00') : '99:99';
           if (at !== bt) return at < bt ? -1 : 1;
           return a.createdAt - b.createdAt;
         });
-      });
-      var overdueG = computed(function () {
-        return activeTasks.value.filter(function (t) {
-          if (!isDated(t)) return false;
-          return endsAtOf(t) < S.today;
-        }).sort(function (a, b) {
-          if (a.targetDate !== b.targetDate) return a.targetDate < b.targetDate ? -1 : 1;
-          return a.createdAt - b.createdAt;
+      }
+      /* 今天 = 今天开始，或跨天且仍在进行中；逾期 = 整个区间都过去了。两者互斥 */
+      function bucketByDay(list) {
+        var todayArr = [], overArr = [];
+        list.forEach(function (t) {
+          if (!isDated(t)) return;
+          var endsAt = endsAtOf(t);
+          if (endsAt < S.today) overArr.push(t);
+          else if (t.targetDate === S.today || (t.targetDate < S.today && endsAt >= S.today)) todayArr.push(t);
         });
+        return {
+          today: sortByTime(todayArr),
+          overdue: overArr.sort(function (a, b) {
+            if (a.targetDate !== b.targetDate) return a.targetDate < b.targetDate ? -1 : 1;
+            return a.createdAt - b.createdAt;
+          })
+        };
+      }
+      var openTasksG = computed(function () {
+        return S.tasks.filter(function (t) { return !t.deleted && !t.completed; });
       });
+      var todayListG = computed(function () { return bucketByDay(activeTasks.value).today; });
+      var overdueG = computed(function () { return bucketByDay(activeTasks.value).overdue; });
       /* 时间轴只放明天及以后：今天/逾期已在今日计划栏，避免同一条在一屏里渲染两遍 */
       var timelineFutureG = computed(function () {
         return timelineG.value.filter(function (g) { return g.kind !== 'overdue' && g.kind !== 'today'; });
       });
-      /* 简报最多列 6 条：先今天，再补逾期；逾期项用「逾期 11月05日」代替时间，避免被读成正常安排 */
+      /* 简报不跟随搜索：上面的数字来自全量统计，明细也必须全量，否则会出现“说 8 项只列 1 项”。
+         逾期项标的是截止日（区间结束日），不是开始日。 */
       var briefItemsG = computed(function () {
-        var rows = todayListG.value.slice(0, 4).map(function (t) {
+        var b = bucketByDay(openTasksG.value);
+        var rows = b.today.slice(0, 4).map(function (t) {
           return { task: t, overdue: false, time: t.targetTime || '全天' };
         });
-        overdueG.value.slice(0, 6 - rows.length).forEach(function (t) {
-          rows.push({ task: t, overdue: true, time: '逾期 ' + fmtMD(t.targetDate) });
+        b.overdue.slice(0, 6 - rows.length).forEach(function (t) {
+          rows.push({ task: t, overdue: true, time: '逾期 ' + fmtMD(endsAtOf(t)) });
         });
         return rows;
       });
@@ -3406,6 +3425,8 @@ img{display:block;max-width:100%}
           /* 今天：今天开始，或跨天任务仍在进行中 */
           var isToday = t.targetDate === S.today || (t.targetDate < S.today && endsAt >= S.today);
           if (isToday) {
+            /* 有完成时间且不是今天完成的，是早先做完的老事，不算“今天的完成” */
+            if (t.completed && t.completedAt && ymd(new Date(t.completedAt)) !== S.today) return;
             total++;
             if (t.completed) done++; else open++;
           }
@@ -3884,9 +3905,32 @@ img{display:block;max-width:100%}
           }).catch(function () { S.pwa.sw = 'none'; });
         } catch (e) { S.pwa.sw = 'unknown'; }
       }
-      function hardReload() {
-        try { location.reload(true); } catch (e) { location.href = location.href; }
+      /* 等新 Service Worker 真正接管再刷新：只等固定毫秒，慢网下会刷回旧缓存 */
+      function reloadWhenSwReady() {
+        var fired = false;
+        function go() {
+          if (fired) return;
+          fired = true;
+          location.reload();
+        }
+        if (!('serviceWorker' in navigator) || !navigator.serviceWorker.getRegistration) { go(); return; }
+        var sw = navigator.serviceWorker;
+        try { sw.addEventListener('controllerchange', go, { once: true }); } catch (e) { /* 老浏览器忽略 */ }
+        sw.getRegistration().then(function (reg) {
+          if (!reg) { setTimeout(go, 300); return; }
+          var p = reg.update ? reg.update().catch(function () { /* 检查失败也要刷新 */ }) : Promise.resolve();
+          return p.then(function () {
+            var w = reg.installing || reg.waiting;
+            if (!w) { setTimeout(go, 300); return; }          /* 没有新版本：直接刷 */
+            if (w.state === 'activated') { go(); return; }
+            w.addEventListener('statechange', function () {
+              if (w.state === 'activated' || w.state === 'redundant') go();
+            });
+            setTimeout(go, 5000);                             /* 兜底，别把用户困在这里 */
+          });
+        }).catch(function () { setTimeout(go, 500); });
       }
+      function hardReload() { reloadWhenSwReady(); }
 
       var pwaSwTextC = computed(function () {
         var map = {
@@ -3910,14 +3954,7 @@ img{display:block;max-width:100%}
         if (updateOffered) return;
         updateOffered = true;
         toast('发现新版本，可立即更新', false, '更新', function () {
-          try {
-            if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-              navigator.serviceWorker.getRegistrations().then(function (rs) {
-                rs.forEach(function (r) { try { r.update(); } catch (e) {} });
-              });
-            }
-          } catch (e) { /* ignore */ }
-          setTimeout(function () { location.reload(); }, 800);
+          reloadWhenSwReady();
         });
       }
       /* 返回 'new' | 'same' | 'unknown' | 'skipped'，让调用方能区分「已是最新」与「查不了」 */
@@ -4008,7 +4045,10 @@ img{display:block;max-width:100%}
           if (Array.isArray(raw)) {
             var normalized = raw.map(normalizeTask);
             var invalidCount = normalized.filter(function (t) { return !t; }).length;
+            /* 装载本地数据不是“用户改动”：否则会再排一次 8 秒后的自动同步，和启动那次重复 */
+            suppressAutoSync = true;
             S.tasks = normalized.filter(Boolean);
+            nextTick(function () { suppressAutoSync = false; });
             if (invalidCount) {
               S.storageWarning = '本地数据库有 ' + invalidCount + ' 条无法识别的记录；为避免覆盖原始数据，已暂停自动保存与云同步。请先保留浏览器数据并检查备份。';
             }
@@ -4198,7 +4238,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.7.2', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.3', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
