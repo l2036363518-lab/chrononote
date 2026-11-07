@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.7.6
+  ChronoNote · 智能时间流记事与待办 v1.7.7
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
@@ -1106,7 +1106,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.7.6 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.7 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -1479,6 +1479,20 @@ img{display:block;max-width:100%}
   }
   function saveRegistry(r) {
     try { localStorage.setItem(REGISTRY_KEY, JSON.stringify(r || {})); } catch (e) { /* 配额或隐私模式：忽略 */ }
+  }
+  /* 已清理、但云端可能还留着的墓碑 id。持久化，这样这次推送失败也能在下一次同步补上 */
+  var PURGE_KEY = 'chronoPurgeIds';
+  function loadPurgeIds() {
+    try {
+      var v = JSON.parse(localStorage.getItem(PURGE_KEY) || '[]');
+      return Array.isArray(v) ? v.filter(function (x) { return typeof x === 'string' && x; }) : [];
+    } catch (e) { return []; }
+  }
+  function savePurgeIds(ids) {
+    try {
+      if (ids && ids.length) localStorage.setItem(PURGE_KEY, JSON.stringify(ids));
+      else localStorage.removeItem(PURGE_KEY);
+    } catch (e) { /* ignore */ }
   }
   function mergeRegistry(base, extra) {
     var out = {};
@@ -2053,7 +2067,7 @@ img{display:block;max-width:100%}
     return 'noid-' + (h >>> 0).toString(36);
   }
 
-  function normalizeTask(raw) {
+  function normalizeTask(raw, useStableId) {
     if (!raw || typeof raw !== 'object') return null;
     var now = Date.now();
     var timeType = VALID_TYPES.indexOf(raw.timeType) >= 0 ? raw.timeType : null;
@@ -2107,7 +2121,9 @@ img{display:block;max-width:100%}
     }
 
     var out = {
-      id: raw.id ? String(raw.id) : stableIdOf(raw),
+      /* 只有「云端/导入的缺 id 记录」才用内容哈希：同一份数据反复解析要得到同一个 id。
+         本地新建（AI 批量、手输、图片）必须走 uid()，否则同标题同时间的两个任务会撞成一个 */
+      id: raw.id ? String(raw.id) : (useStableId ? stableIdOf(raw) : uid()),
       title: String(raw.title == null ? '' : raw.title).trim() || '未命名事项',
       timeType: timeType,
       targetDate: targetDate,
@@ -2744,7 +2760,12 @@ img{display:block;max-width:100%}
       var suppressAutoSync = false;
       var dirtySinceSync = false;
       var localChangeSeq = 0;   /* 本地改动序号：同步前后比对，判断这次同步是否漏掉了新改动 */
-      var purgingTombstones = false;   /* 这次同步是「清理删除标记」触发的，合并后要滤掉云端旧墓碑 */
+      var bc = null;            /* 多标签页广播通道（onMounted 里初始化） */
+      /* 落盘成功后才广播：先广播会让另一个标签页读到的还是旧库 */
+      function notifyTabs() {
+        if (!bc) return;
+        try { bc.postMessage({ t: 'changed' }); } catch (e) {}
+      }
       function persistNow() {
         /* 本地库还没读完就落盘 = 拿空数组覆盖用户数据（pagehide / 切后台都会走到这里）。
            getItem 是异步的，首屏这段时间必须什么都不写。 */
@@ -2758,6 +2779,7 @@ img{display:block;max-width:100%}
             if (dbPersistent && S.storageWarning && /本地保存失败|数据序列化失败/.test(S.storageWarning)) {
               S.storageWarning = '';
             }
+            notifyTabs();
           }).catch(function (e) {
             console.error('[ChronoNote] 写入失败', e);
             S.storageWarning = '本地保存失败，当前修改可能无法在刷新后保留。请先导出备份，并检查浏览器存储权限。';
@@ -3207,6 +3229,9 @@ img{display:block;max-width:100%}
           return;
         }
         S.aiLoading = true;
+        /* 请求期间用户可能继续输入：记下当时的草稿，回来只清掉「没变过」的那份 */
+        var draftAtStart = S.draft;
+        var imgsAtStart = S.draftImages.slice();
         callDeepSeek(text).then(function (raw) {
           var now = Date.now();
           var list = raw.map(function (r) {
@@ -3236,9 +3261,10 @@ img{display:block;max-width:100%}
             imgs.forEach(function (src) { list[0].notes.push(makeImageNote(src)); });
           }
           list.forEach(function (t) { S.tasks.push(t); });
-          S.draft = '';
-          S.draftImages = [];
-          S.draftOverride = null;
+          /* 只清掉发请求时的那份草稿；用户后打的字、后贴的图必须留着 */
+          if (S.draft === draftAtStart) { S.draft = ''; S.draftOverride = null; }
+          if (S.draftImages.length === imgsAtStart.length &&
+              S.draftImages.every(function (s, i) { return s === imgsAtStart[i]; })) S.draftImages = [];
           toast('AI 已拆解 ' + list.length + ' 个事项');
           /* 单条结果切到它真正所在的栏：今天/逾期 → today，模糊 → plan，明天起 → timeline */
           if (list.length === 1) {
@@ -3566,11 +3592,25 @@ img{display:block;max-width:100%}
       }
 
       function parseRemoteTasks(data) {
-        if (Array.isArray(data)) return data.map(normalizeTask).filter(Boolean);
-        if (data && typeof data === 'object' && Array.isArray(data.tasks)) {
-          return data.tasks.map(normalizeTask).filter(Boolean);
-        }
-        throw new Error('数据格式不受支持：预期为任务数组或包含 tasks 数组的对象');
+        var raw = null;
+        if (Array.isArray(data)) raw = data;
+        else if (data && typeof data === 'object' && Array.isArray(data.tasks)) raw = data.tasks;
+        else throw new Error('数据格式不受支持：预期为任务数组或包含 tasks 数组的对象');
+        var out = [];
+        var seen = {};
+        raw.forEach(function (x) {
+          var t = normalizeTask(x, true);
+          if (!t) return;
+          /* 同一份数据里 id 撞车（缺 id 的两条内容相同）：给后出现的加确定性后缀，避免合并时少一条 */
+          if (seen[t.id]) {
+            var n = 2;
+            while (seen[t.id + '#' + n]) n++;
+            t.id = t.id + '#' + n;
+          }
+          seen[t.id] = true;
+          out.push(t);
+        });
+        return out;
       }
 
       function parseRemotePayload(data) {
@@ -3593,6 +3633,10 @@ img{display:block;max-width:100%}
             var kept = 0;
             rawNotes.forEach(function (n) { if (normalizeNote(n)) kept++; });
             if (kept < rawNotes.length) rewritten++;
+            /* 非法日期/时间会被静默清空或降级（exact_time → exact_date → nodate），同样是改写 */
+            var badField = function (v, ok) { return v != null && String(v).trim() !== '' && !ok(String(v)); };
+            if (badField(x.targetDate, isValidISODate) || badField(x.targetTime, isValidTime) ||
+                badField(x.endDate, isValidISODate) || badField(x.endTime, isValidTime)) rewritten++;
           });
         }
         var rawLen = rawList ? rawList.length : tasks.length;
@@ -3667,24 +3711,25 @@ img{display:block;max-width:100%}
         /* 本地库还没读完就同步 = 拿空数组去合并，再把结果写回本地库，会盖掉尚未载入的记录 */
         if (!S.ready) {
           if (!silent) toast('正在读取本地数据，请稍候一瞬再同步');
-          return Promise.resolve();
+          return Promise.resolve({ ok: false, reason: 'not-ready' });
         }
         if (S.storageWarning && /读取本地数据库失败|持久化存储组件不可用|本地保存失败|序列化失败|无法识别的记录|数据库格式无法识别/.test(S.storageWarning)) {
           if (!silent) toast('本地数据状态异常，已暂停云同步以防覆盖数据。请先导出备份并修复本地存储。', true);
-          return Promise.resolve();
+          return Promise.resolve({ ok: false, reason: 'local-warning' });
         }
         var token = String(S.settings.githubToken || '').trim();
         if (!token) {
           if (!silent) { S.settingsOpen = true; toast('请先在设置里填写 GitHub Token', true); }
-          return Promise.resolve();
+          return Promise.resolve({ ok: false, reason: 'no-token' });
         }
-        if (S.syncing) return Promise.resolve();
+        if (S.syncing) return Promise.resolve({ ok: false, reason: 'busy' });
         S.syncing = true;
         S.sync = { state: 'syncing', at: S.sync.at, message: '正在与 Gist 同步…' };
         var gid = String(S.settings.gistId || '').trim();
         var remoteTasks = null;
         var pullStamp = '';   /* 拉取时 Gist 的 updated_at，用于 PATCH 前检测并发写入 */
         var remoteInvalid = 0; /* 云端规范化不了的记录数：>0 时只拉取不推送 */
+        var purgedIds = loadPurgeIds();   /* 已清理的墓碑 id：合并时精确滤掉，推送成功后再清空 */
         var seqAtStart = localChangeSeq;   /* 同步期间用户又改了东西就别谎称“已同步” */
 
         var gistPath = '/gists/' + encodeURIComponent(gid);
@@ -3708,7 +3753,7 @@ img{display:block;max-width:100%}
           if (gid) {
             merged = mergeTasks(S.tasks.slice(), remote);
             /* 清理墓碑后的那一次同步：云端旧墓碑会被 merge 拉回来，这里再滤掉，否则清理白做 */
-            if (purgingTombstones) merged = merged.filter(function (t) { return !t.deleted; });
+            if (purgedIds.length) merged = merged.filter(function (t) { return !(t.deleted && purgedIds.indexOf(t.id) >= 0); });
           } else {
             merged = S.tasks.slice();
           }
@@ -3757,7 +3802,7 @@ img{display:block;max-width:100%}
                 }
                 if (newer && newer.invalid) { remoteInvalid = newer.invalid; return; }
                 var merged2 = mergeTasks(S.tasks.slice(), newer.tasks);
-                if (purgingTombstones) merged2 = merged2.filter(function (t) { return !t.deleted; });
+                if (purgedIds.length) merged2 = merged2.filter(function (t) { return !(t.deleted && purgedIds.indexOf(t.id) >= 0); });
                 suppressAutoSync = true;
                 S.tasks = merged2;
                 nextTick(function () { suppressAutoSync = false; });
@@ -3782,10 +3827,13 @@ img{display:block;max-width:100%}
         }).then(function () {
           S.syncing = false;
           if (remoteInvalid) {
-            S.sync = { state: 'ok', at: Date.now(), message: '云端有 ' + remoteInvalid + ' 条无法识别的记录：本次只拉取、未推送' };
+            /* 没推送就别报“成功”：状态文字要让用户知道本地改动还没上云 */
+            S.sync = { state: 'ok', at: Date.now(), partial: true, message: '云端有 ' + remoteInvalid + ' 条无法识别的记录：本次只拉取、未推送' };
             toast('云端有 ' + remoteInvalid + ' 条无法识别的记录；本次只拉取不推送，避免把它们从 Gist 抹掉', true);
-            return;
+            return { ok: false, reason: 'remote-invalid' };
           }
+          /* 推送成功：这次清理掉的墓碑已经从云端消失，可以清掉待补推列表 */
+          if (purgedIds.length) savePurgeIds([]);
           /* 同步期间用户又改了东西：云端没包含最新改动，不能说“已同步” */
           var stillDirty = localChangeSeq !== seqAtStart;
           if (!stillDirty) dirtySinceSync = false;
@@ -3794,6 +3842,7 @@ img{display:block;max-width:100%}
             message: stillDirty ? '已同步，还有新改动待推送' : '已同步 ' + hhmm(Date.now())
           };
           if (!silent) toast('同步完成 · ' + S.tasks.filter(function (t) { return !t.deleted; }).length + ' 条记录');
+          return { ok: true };
         }).catch(function (err) {
           S.syncing = false;
           var msg = err && err.message ? err.message : '未知错误';
@@ -3802,6 +3851,7 @@ img{display:block;max-width:100%}
           if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) msg = '网络请求失败，请检查网络或代理';
           S.sync = { state: 'error', at: Date.now(), message: msg };
           if (!silent) toast('同步失败：' + msg, true);
+          return { ok: false, reason: msg };
         });
       }
 
@@ -3923,14 +3973,18 @@ img{display:block;max-width:100%}
           okText: '确认清理',
           danger: true,
           onOk: function () {
+            if (S.syncing) { toast('正在同步中，等这次同步结束再清理', true); return; }
+            /* 只滤掉这一次清理掉的 id：别的设备刚删的记录（新墓碑）不受影响 */
+            var ids = dead.map(function (t) { return t.id; });
+            savePurgeIds(ids);
             S.tasks = S.tasks.filter(function (t) { return !t.deleted; });
             persistNow();
             toast('已清除 ' + dead.length + ' 条删除标记');
-            /* 直接 doSync 会把云端旧墓碑合并回来再原样推上去，等于没清理；
-               这里带上 purgingTombstones，合并后滤掉墓碑再推送 */
             if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) {
-              purgingTombstones = true;
-              doSync(true).then(function () { purgingTombstones = false; }, function () { purgingTombstones = false; });
+              doSync(true).then(function (res) {
+                if (res && res.ok) toast('删除标记已从云端一并清除');
+                else toast('本机已清理；云端稍后自动补推（' + ((res && res.reason) || '同步未完成') + '）', true);
+              });
             }
           }
         });
@@ -4153,7 +4207,7 @@ img{display:block;max-width:100%}
         }
         db.getItem(DB_KEY).then(function (raw) {
           if (Array.isArray(raw)) {
-            var normalized = raw.map(normalizeTask);
+            var normalized = raw.map(function (t) { return normalizeTask(t); });
             var invalidCount = normalized.filter(function (t) { return !t; }).length;
             /* 装载本地数据不是“用户改动”：否则会再排一次 8 秒后的自动同步，和启动那次重复 */
             suppressAutoSync = true;
@@ -4197,6 +4251,33 @@ img{display:block;max-width:100%}
             if (S.syncing) { autoSyncTimer = setTimeout(tick, 4000); return; }
             doSync(true);
           }, 8000);
+        }
+        /* ---------- 多标签页：同一份 IndexedDB 不能各写各的 ----------
+           A 页新增一条后，B 页（还停在旧数组）下次保存会把 A 的改动整个盖掉。
+           这里用 BroadcastChannel 广播“我改了”，其他标签页收到后从库里重新合并。 */
+        try { bc = (typeof BroadcastChannel === 'function') ? new BroadcastChannel('chrononote-tabs') : null; } catch (e) { bc = null; }        var peerPullTimer = null;
+        function pullFromDbSoon() {
+          clearTimeout(peerPullTimer);
+          peerPullTimer = setTimeout(function () {
+            db.getItem(DB_KEY).then(function (cur) {
+              if (!Array.isArray(cur)) return;
+              var disk = cur.map(function (t) { return normalizeTask(t); }).filter(Boolean);
+              if (!disk.length) return;
+              suppressAutoSync = true;
+              S.tasks = mergeTasks(S.tasks.slice(), disk);
+              nextTick(function () { suppressAutoSync = false; });
+            }).catch(function () { /* 读失败就算了，别影响当前页 */ });
+          }, 120);
+        }
+        if (bc) {
+          bc.onmessage = function (e) {
+            var d = e && e.data;
+            if (!d) return;
+            if (d.t === 'hello') { try { bc.postMessage({ t: 'changed' }); } catch (err) {} return; }
+            if (d.t === 'changed') pullFromDbSoon();
+          };
+          /* 打开时先问一声：已经在开着的那页会回一条 changed，于是本页立刻拉一次 */
+          try { bc.postMessage({ t: 'hello' }); } catch (e) {}
         }
         watch(function () { return S.tasks; }, function () {
           scheduleSave();
@@ -4311,6 +4392,7 @@ img{display:block;max-width:100%}
 
       var syncStateC = computed(function () {
         if (S.syncing || S.sync.state === 'syncing') return 'syncing';
+        if (S.sync.partial) return 'error';      /* 只拉未推：用警示色，别让用户以为已经上云 */
         if (S.sync.state === 'error') return 'error';
         if (!String(S.settings.githubToken || '').trim()) return 'off';
         if (S.sync.state === 'ok') return 'ok';
@@ -4318,6 +4400,7 @@ img{display:block;max-width:100%}
       });
       var syncTextC = computed(function () {
         if (S.syncing) return '同步中';
+        if (S.sync.partial) return '只拉未推';
         if (S.sync.state === 'error') return '同步失败';
         if (!String(S.settings.githubToken || '').trim()) return '未连接';
         if (S.sync.at) return '已同步 ' + hhmm(S.sync.at);
@@ -4353,7 +4436,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.7.6', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.7', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
