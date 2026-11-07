@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.7.5
+  ChronoNote · 智能时间流记事与待办 v1.7.6
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
@@ -1106,7 +1106,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.7.5 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.6 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -2043,6 +2043,16 @@ img{display:block;max-width:100%}
     return note;
   }
 
+  /* 没有 id 的记录（多见于手工改过的 Gist）：按内容算一个稳定 id。
+     否则每次解析都会生成新 uid，同一条云端记录会被反复当成新任务并入，越同步越多。 */
+  function stableIdOf(raw) {
+    var s = [raw.title, raw.targetDate, raw.targetTime, raw.endDate, raw.endTime,
+      raw.createdAt, raw.timeType || raw.type].join('|');
+    var h = 0;
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return 'noid-' + (h >>> 0).toString(36);
+  }
+
   function normalizeTask(raw) {
     if (!raw || typeof raw !== 'object') return null;
     var now = Date.now();
@@ -2097,7 +2107,7 @@ img{display:block;max-width:100%}
     }
 
     var out = {
-      id: raw.id ? String(raw.id) : uid(),
+      id: raw.id ? String(raw.id) : stableIdOf(raw),
       title: String(raw.title == null ? '' : raw.title).trim() || '未命名事项',
       timeType: timeType,
       targetDate: targetDate,
@@ -2734,6 +2744,7 @@ img{display:block;max-width:100%}
       var suppressAutoSync = false;
       var dirtySinceSync = false;
       var localChangeSeq = 0;   /* 本地改动序号：同步前后比对，判断这次同步是否漏掉了新改动 */
+      var purgingTombstones = false;   /* 这次同步是「清理删除标记」触发的，合并后要滤掉云端旧墓碑 */
       function persistNow() {
         /* 本地库还没读完就落盘 = 拿空数组覆盖用户数据（pagehide / 切后台都会走到这里）。
            getItem 是异步的，首屏这段时间必须什么都不写。 */
@@ -3563,17 +3574,29 @@ img{display:block;max-width:100%}
       }
 
       function parseRemotePayload(data) {
+        var rawList = Array.isArray(data) ? data : (data && Array.isArray(data.tasks) ? data.tasks : null);
         var tasks = parseRemoteTasks(data);
-        var rawLen = Array.isArray(data) ? data.length
-          : (data && Array.isArray(data.tasks) ? data.tasks.length : tasks.length);
         var devices = {};
         var schema = 1;
         if (data && typeof data === 'object' && !Array.isArray(data)) {
           if (data.devices && typeof data.devices === 'object') devices = data.devices;
           schema = Number(data.schema) || 1;
         }
-        /* 云端有规范化不了的记录：数量要带出去，同步时只拉取不推送，别把它们从 Gist 抹掉 */
-        return { tasks: tasks, devices: devices, schema: schema, invalid: Math.max(0, rawLen - tasks.length) };
+        /* 除了整条规范化失败，还有几种会被“静默改写”的情况：缺 id（会生成新 id，等于换了身份）、
+           备注被过滤。这些一旦回推就是拿改写结果覆盖原文，所以一并计入 invalid，本次只拉不推 */
+        var rewritten = 0;
+        if (rawList) {
+          rawList.forEach(function (x) {
+            if (!x || typeof x !== 'object') return;      /* 这种已经算进 rawLen - tasks.length */
+            if (!String(x.id == null ? '' : x.id).trim()) { rewritten++; return; }
+            var rawNotes = Array.isArray(x.notes) ? x.notes : [];
+            var kept = 0;
+            rawNotes.forEach(function (n) { if (normalizeNote(n)) kept++; });
+            if (kept < rawNotes.length) rewritten++;
+          });
+        }
+        var rawLen = rawList ? rawList.length : tasks.length;
+        return { tasks: tasks, devices: devices, schema: schema, invalid: Math.max(0, rawLen - tasks.length, rewritten) };
       }
 
       /**
@@ -3684,6 +3707,8 @@ img{display:block;max-width:100%}
           var merged;
           if (gid) {
             merged = mergeTasks(S.tasks.slice(), remote);
+            /* 清理墓碑后的那一次同步：云端旧墓碑会被 merge 拉回来，这里再滤掉，否则清理白做 */
+            if (purgingTombstones) merged = merged.filter(function (t) { return !t.deleted; });
           } else {
             merged = S.tasks.slice();
           }
@@ -3732,6 +3757,7 @@ img{display:block;max-width:100%}
                 }
                 if (newer && newer.invalid) { remoteInvalid = newer.invalid; return; }
                 var merged2 = mergeTasks(S.tasks.slice(), newer.tasks);
+                if (purgingTombstones) merged2 = merged2.filter(function (t) { return !t.deleted; });
                 suppressAutoSync = true;
                 S.tasks = merged2;
                 nextTick(function () { suppressAutoSync = false; });
@@ -3900,7 +3926,12 @@ img{display:block;max-width:100%}
             S.tasks = S.tasks.filter(function (t) { return !t.deleted; });
             persistNow();
             toast('已清除 ' + dead.length + ' 条删除标记');
-            if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) doSync(true);
+            /* 直接 doSync 会把云端旧墓碑合并回来再原样推上去，等于没清理；
+               这里带上 purgingTombstones，合并后滤掉墓碑再推送 */
+            if (String(S.settings.githubToken || '').trim() && String(S.settings.gistId || '').trim()) {
+              purgingTombstones = true;
+              doSync(true).then(function () { purgingTombstones = false; }, function () { purgingTombstones = false; });
+            }
           }
         });
       }
@@ -4322,7 +4353,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.7.5', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.6', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
