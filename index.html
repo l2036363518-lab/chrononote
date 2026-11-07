@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.7.1
+  ChronoNote · 智能时间流记事与待办 v1.7.2
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
@@ -366,6 +366,7 @@ img{display:block;max-width:100%}
 .bl-row{display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid #F1F4F8;font-size:12.5px}
 .bl-row:last-child{border-bottom:0}
 .bl-time{font-family:var(--mono);font-size:11px;color:var(--muted);flex:0 0 auto;min-width:38px}
+.bl-time.late{color:var(--coral);font-weight:600;min-width:64px}
 .bl-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
 .bl-row.done .bl-title{text-decoration:line-through;color:var(--faint)}
 .brief-empty{padding:14px 18px 4px;color:var(--faint);font-size:12px}
@@ -730,6 +731,11 @@ img{display:block;max-width:100%}
 @media (min-width:1024px){
   .mobile-only{display:none!important}
 }
+/* 窄屏顶栏要塞下搜索 + 同步 + 简报 + 设置：先让出品牌文字，只留图标 */
+@media (max-width:430px){
+  .brand-name{display:none}
+  .topbar-in{gap:6px}
+}
 </style>
 </head>
 <body>
@@ -759,6 +765,10 @@ img{display:block;max-width:100%}
 
       <button class="sync-chip" :class="'is-'+syncState" @click="A.syncClick" :title="S.sync.message || '同步状态'">
         <span class="dot"></span><span class="sync-text">{{ syncText }}</span>
+      </button>
+
+      <button class="icon-btn" @click="A.previewBrief" title="今日简报" aria-label="今日简报">
+        <icon name="sun" :size="16"/>
       </button>
 
       <button class="icon-btn" @click="A.openSettings" title="设置" aria-label="设置">
@@ -1094,7 +1104,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.7.1 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.2 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -1141,12 +1151,12 @@ img{display:block;max-width:100%}
           <div class="bs"><b>{{ G.counts.fuzzy }}</b><span>近期规划</span></div>
         </div>
         <div class="brief-list" v-if="G.briefItems.length">
-          <div class="bl-row" :class="{done:t.completed}" v-for="t in G.briefItems" :key="t.id">
-            <button class="check" :class="{on:t.completed}" @click.stop="A.toggleTask(t)" :aria-label="t.completed?'标记为未完成':'标记为已完成'">
-              <icon v-if="t.completed" name="check" :size="9" :stroke="3.2"/>
+          <div class="bl-row" :class="{done:row.task.completed}" v-for="row in G.briefItems" :key="row.task.id">
+            <button class="check" :class="{on:row.task.completed}" @click.stop="A.toggleTask(row.task)" :aria-label="row.task.completed?'标记为未完成':'标记为已完成'">
+              <icon v-if="row.task.completed" name="check" :size="9" :stroke="3.2"/>
             </button>
-            <span class="bl-time">{{ t.targetTime || '全天' }}</span>
-            <span class="bl-title">{{ t.title }}</span>
+            <span class="bl-time" :class="{late:row.overdue}">{{ row.time }}</span>
+            <span class="bl-title">{{ row.task.title }}</span>
           </div>
         </div>
         <div class="brief-empty" v-else>今天没有排定的事项。想做什么，现在写下来就来得及。</div>
@@ -1205,7 +1215,7 @@ img{display:block;max-width:100%}
 <script type="text/x-template" id="tpl-card">
 <div class="task" :class="cardClass" :data-id="task.id" @click="onCardClick">
   <div class="task-in">
-    <button class="check" :class="{on:task.completed}" @click="A.toggleTask(task)"
+    <button class="check" :class="{on:task.completed}" @click.stop="A.toggleTask(task)"
             :title="task.completed ? '标记为未完成' : '标记为已完成'" :aria-pressed="task.completed">
       <icon v-if="task.completed" name="check" :size="11" :stroke="3.2"/>
     </button>
@@ -1213,11 +1223,11 @@ img{display:block;max-width:100%}
     <div class="task-body">
       <div class="task-title-row">
         <button v-if="showClock" class="t-time" :class="{overdue:isOverdue, done:task.completed}"
-                @click="A.openPicker(task, $event)" :title="clockTitle">{{ timeLabel }}</button>
-        <button v-else-if="showAllday" class="t-allday" @click="A.openPicker(task, $event)" title="全天事项">全天</button>
+                @click.stop="A.openPicker(task, $event)" :title="clockTitle">{{ timeLabel }}</button>
+        <button v-else-if="showAllday" class="t-allday" @click.stop="A.openPicker(task, $event)" title="全天事项">全天</button>
         <button v-else-if="showFuzzy" class="t-fuzzy" :class="'fz-'+task.fuzzyTag"
-                @click="A.openPicker(task, $event)">{{ fuzzyText }}</button>
-        <button v-else class="t-schedule" @click="A.openPicker(task, $event)" title="点击安排时间">+ 排期</button>
+                @click.stop="A.openPicker(task, $event)">{{ fuzzyText }}</button>
+        <button v-else class="t-schedule" @click.stop="A.openPicker(task, $event)" title="点击安排时间">+ 排期</button>
 
         <input v-if="editing" ref="titleInput" class="title-input" v-model="titleDraft"
                @keydown.enter.prevent="commitTitle" @keydown.esc.stop="cancelTitle" @blur="commitTitle">
@@ -1225,16 +1235,16 @@ img{display:block;max-width:100%}
       </div>
 
       <div class="task-meta" v-if="hasMeta">
-        <button class="mini-chip" v-if="counts.text" @click="A.toggleExpand(task)" :title="counts.text+' 条文字备注'">📝 {{ counts.text }}</button>
-        <button class="mini-chip" v-if="counts.link" @click="A.toggleExpand(task)" :title="counts.link+' 条链接备注'">🔗 {{ counts.link }}</button>
-        <button class="mini-chip" v-if="counts.image" @click="A.toggleExpand(task)" :title="counts.image+' 张图片'">🖼️ {{ counts.image }}</button>
+        <button class="mini-chip" v-if="counts.text" @click.stop="A.toggleExpand(task)" :title="counts.text+' 条文字备注'">📝 {{ counts.text }}</button>
+        <button class="mini-chip" v-if="counts.link" @click.stop="A.toggleExpand(task)" :title="counts.link+' 条链接备注'">🔗 {{ counts.link }}</button>
+        <button class="mini-chip" v-if="counts.image" @click.stop="A.toggleExpand(task)" :title="counts.image+' 张图片'">🖼️ {{ counts.image }}</button>
         <span class="meta-warn" v-if="isOverdue">已过期</span>
         <span class="meta-hit" v-if="noteHit" :title="noteHit">{{ noteHit }}</span>
         <span class="meta-line" v-if="metaText">{{ metaText }}</span>
       </div>
     </div>
 
-    <div class="task-tools">
+    <div class="task-tools" @click.stop>
       <button class="tool" @click="A.toggleExpand(task)" :title="expanded ? '收起备注' : '打开备注'">
         <icon :name="expanded ? 'chevron-down' : 'chevron-right'" :size="13"/>
       </button>
@@ -1276,7 +1286,7 @@ img{display:block;max-width:100%}
 
         <div class="note-imgs" v-if="imageNotes.length">
           <div class="note-img" v-for="n in imageNotes" :key="n.id">
-            <img :src="n.content" alt="图片备注" loading="lazy" @click="A.openLightbox(n)">
+            <img :src="n.content" alt="图片备注" loading="lazy" decoding="async" @click="A.openLightbox(n)">
             <button class="img-del" @click.stop="A.deleteNote(task,n)" aria-label="删除图片">×</button>
           </div>
         </div>
@@ -2316,7 +2326,9 @@ img{display:block;max-width:100%}
           '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + inner + '</svg>';
       }
     },
-    template: '<span class="icn" style="display:inline-flex;line-height:0" v-html="markup"></span>'
+    // 图标永远不吃鼠标事件：v-html 会整体替换 <svg>，若让它成为事件目标，
+    // 祖先的 click 处理器在 DOM 换过之后 closest() 就找不到原按钮了。
+    template: '<span class="icn" style="display:inline-flex;line-height:0;pointer-events:none" v-html="markup"></span>'
   };
 
   /* ==========================================================================
@@ -3186,7 +3198,14 @@ img{display:block;max-width:100%}
           S.draftImages = [];
           S.draftOverride = null;
           toast('AI 已拆解 ' + list.length + ' 个事项');
-          if (list.length === 1) S.tab = list[0].targetDate || list[0].fuzzyTag ? 'timeline' : 'inbox';
+          /* 单条结果切到它真正所在的栏：今天/逾期 → today，模糊 → plan，明天起 → timeline */
+          if (list.length === 1) {
+            var t0 = list[0];
+            if (t0.timeType === 'fuzzy') S.tab = 'plan';
+            else if (t0.targetDate && t0.targetDate <= S.today) S.tab = 'today';
+            else if (t0.targetDate) S.tab = 'timeline';
+            else S.tab = 'inbox';
+          }
         }).catch(function (err) {
           console.error('[ChronoNote] AI 失败', err);
           var msg = err && err.message ? err.message : '未知错误';
@@ -3353,11 +3372,15 @@ img{display:block;max-width:100%}
       var timelineFutureG = computed(function () {
         return timelineG.value.filter(function (g) { return g.kind !== 'overdue' && g.kind !== 'today'; });
       });
-      /* 简报最多列 6 条：先今天，再补逾期 */
+      /* 简报最多列 6 条：先今天，再补逾期；逾期项用「逾期 11月05日」代替时间，避免被读成正常安排 */
       var briefItemsG = computed(function () {
-        var a = todayListG.value.slice(0, 4);
-        var b = overdueG.value.slice(0, 6 - a.length);
-        return a.concat(b);
+        var rows = todayListG.value.slice(0, 4).map(function (t) {
+          return { task: t, overdue: false, time: t.targetTime || '全天' };
+        });
+        overdueG.value.slice(0, 6 - rows.length).forEach(function (t) {
+          rows.push({ task: t, overdue: true, time: '逾期 ' + fmtMD(t.targetDate) });
+        });
+        return rows;
       });
 
       var countsG = computed(function () {
@@ -3941,11 +3964,9 @@ img{display:block;max-width:100%}
         S.brief.greeting = greetingFor(new Date().getHours());
         S.brief.preview = !!preview;
         S.brief.open = true;
-        /* 只有真正弹过才记“今天已看”；预览不占用当天额度 */
-        if (!preview) {
-          writePref('briefLast', isoToday());
-          writePref('briefSnooze', '0');
-        }
+        /* 不在这里记「今天已看」：否则点「稍后提醒」后 briefLast 已是今天，
+           30 分钟后 maybeOpenBrief 会直接返回，永远不再提醒。记账放到 closeBrief。 */
+        if (!preview) writePref('briefSnooze', '0');
       }
       function maybeOpenBrief() {
         if (!S.ready || S.brief.open) return;
@@ -3957,7 +3978,12 @@ img{display:block;max-width:100%}
         if (!sn && !briefWindowPassed()) return;
         openBrief(false);
       }
-      function closeBrief() { S.brief.open = false; }
+      /* 用户真的处理掉（开始今天 / 遮罩关闭 / Esc）才算今天看过；预览不占额度 */
+      function closeBrief() {
+        var wasPreview = S.brief.preview;
+        S.brief.open = false;
+        if (!wasPreview) writePref('briefLast', isoToday());
+      }
       function snoozeBrief() {
         S.brief.open = false;
         writePref('briefSnooze', Date.now() + 30 * 60000);
@@ -4172,7 +4198,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.7.1', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.2', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
