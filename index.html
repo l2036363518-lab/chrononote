@@ -1,11 +1,12 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.6.2
+  ChronoNote · 智能时间流记事与待办 v1.7.1
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
-  · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / chrononoteDeviceId 存 localStorage
+  · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
   · 同步：GitHub Gist 按 id 合并，按 updatedAt / updatedBy / updateId 冲突排序；删除墓碑长期保留
   · 语法：` // ` 之后为子备注（含 URL 自动转为链接备注）；输入框内 Ctrl+V 可直接粘贴图片
+  · 布局：四栏（今日计划 / 时间轴 / 大致规划 / 琐事箱）；点击标题或整行展开备注，双击标题或 ✏️ 重命名
 -->
 <html lang="zh-CN">
 <head>
@@ -278,7 +279,7 @@ img{display:block;max-width:100%}
   background:#EDF1F6;border:1px solid #E6ECF3;position:sticky;top:52px;z-index:30;
   -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
 }
-.seg-btn{flex:1;height:31px;border-radius:9px;display:flex;align-items:center;justify-content:center;gap:5px;font-size:12px;font-weight:500;color:var(--muted);transition:.18s;min-width:0}
+.seg-btn{flex:1;height:31px;border-radius:9px;display:flex;align-items:center;justify-content:center;gap:4px;font-size:11.5px;font-weight:500;color:var(--muted);transition:.18s;min-width:0;padding:0 2px}
 .seg-btn .lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .seg-btn .badge{
   min-width:17px;height:16px;padding:0 4px;border-radius:999px;background:#DDE4EC;color:#546279;
@@ -286,19 +287,30 @@ img{display:block;max-width:100%}
 }
 .seg-btn.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.09),0 0 0 .5px rgba(15,23,42,.04)}
 .seg-btn.on .badge{background:var(--indigo-soft);color:var(--indigo)}
+/* 四个分段在窄屏上横向很紧：先让出角标，保住文字（规则须排在 .badge 之后） */
+@media (max-width:430px){
+  .seg-btn .badge{display:none}
+  .seg-btn{gap:3px;font-size:11px}
+}
 
 /* ============================================================
-   6. 主体三栏
+   6. 主体四栏
    ============================================================ */
 .board{
-  width:100%;max-width:1460px;margin:0 auto;padding:14px 22px 72px;
-  display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr);
-  gap:26px;align-items:start;
+  width:100%;max-width:1560px;margin:0 auto;padding:14px 22px 72px;
+  display:grid;
+  grid-template-columns:minmax(0,1.15fr) minmax(0,1.5fr) minmax(0,.95fr) minmax(0,.95fr);
+  gap:22px;align-items:start;
 }
 .col{min-width:0;animation:rise .55s var(--ease) both}
 .col:nth-child(1){animation-delay:.06s}
 .col:nth-child(2){animation-delay:.11s}
 .col:nth-child(3){animation-delay:.16s}
+.col:nth-child(4){animation-delay:.21s}
+/* 中等宽度（1024–1279）放不下四栏，退成两行两列，仍在同一屏内 */
+@media (max-width:1279px) and (min-width:1024px){
+  .board{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 24px}
+}
 .col-head{display:flex;align-items:baseline;gap:8px;margin-bottom:12px;padding:0 2px}
 .col-title{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 .count{
@@ -334,6 +346,32 @@ img{display:block;max-width:100%}
 .tp-add button:not(:disabled):hover{background:var(--indigo-600)}
 .tp-thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
 .tp-thumb{width:46px;height:46px;border-radius:8px}
+
+/* 今日计划栏 */
+.fz-head.is-warn h3{color:#B93F3B}
+.fz-head.is-warn .fz-ic{opacity:1}
+.today-empty{padding:16px 12px;border:1px dashed var(--line);border-radius:var(--r-card);text-align:center;color:var(--faint);font-size:12px;line-height:1.7;background:#FCFDFE}
+
+/* 每日简报 */
+.brief{max-width:470px}
+.brief-hero{padding:18px 20px 14px;border-radius:var(--r-card) var(--r-card) 0 0;background:linear-gradient(135deg,#EEF0FF,#F7F9FF 55%,#FFF)}
+.brief-hi{font-size:19px;font-weight:600;color:var(--ink);letter-spacing:-.01em}
+.brief-date{margin-top:4px;font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.brief-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:14px 18px 4px}
+.brief-stats .bs{background:#F7F9FC;border:1px solid var(--line);border-radius:10px;padding:8px 6px;text-align:center}
+.brief-stats .bs b{display:block;font-family:var(--mono);font-size:17px;font-weight:600;color:var(--ink);line-height:1.2}
+.brief-stats .bs span{font-size:10.5px;color:var(--faint)}
+.brief-stats .bs.warn b{color:var(--coral)}
+.brief-list{padding:10px 18px 2px;max-height:38vh;overflow:auto}
+.bl-row{display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid #F1F4F8;font-size:12.5px}
+.bl-row:last-child{border-bottom:0}
+.bl-time{font-family:var(--mono);font-size:11px;color:var(--muted);flex:0 0 auto;min-width:38px}
+.bl-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.bl-row.done .bl-title{text-decoration:line-through;color:var(--faint)}
+.brief-empty{padding:14px 18px 4px;color:var(--faint);font-size:12px}
+.brief-foot{justify-content:space-between}
+.chk{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2);padding:2px 0 9px;cursor:pointer}
+.chk input{width:15px;height:15px;accent-color:var(--indigo);cursor:pointer;flex:0 0 auto}
 
 /* 日期分组 */
 .daygroup{margin-bottom:24px}
@@ -379,7 +417,7 @@ img{display:block;max-width:100%}
 .task-body{min-width:0}
 .task-title-row{display:flex;align-items:flex-start;gap:7px;flex-wrap:wrap}
 .task-title{
-  font-size:13.6px;font-weight:500;color:var(--ink);line-height:1.5;cursor:text;
+  font-size:13.6px;font-weight:500;color:var(--ink);line-height:1.5;cursor:pointer;user-select:none;
   word-break:break-word;transition:color .15s;letter-spacing:-.006em;
 }
 .task-title:hover{color:var(--indigo-600)}
@@ -759,6 +797,10 @@ img{display:block;max-width:100%}
 
   <!-- 移动端分段控制 -->
   <div class="seg mobile-only" role="tablist">
+    <button class="seg-btn" :class="{on:S.tab==='today'}" @click="S.tab='today'" role="tab">
+      <span>🎯</span><span class="lbl">今日计划</span>
+      <span class="badge" v-if="G.counts.today">{{ G.counts.today }}</span>
+    </button>
     <button class="seg-btn" :class="{on:S.tab==='timeline'}" @click="S.tab='timeline'" role="tab">
       <span>📅</span><span class="lbl">时间轴</span>
       <span class="badge" v-if="G.counts.timeline">{{ G.counts.timeline }}</span>
@@ -773,20 +815,19 @@ img{display:block;max-width:100%}
     </button>
   </div>
 
-  <!-- 三栏主体 -->
+  <!-- 四栏主体 -->
   <main class="board" :class="{'is-searching': !!S.search.trim()}">
-    <!-- 主时间轴 -->
-    <section class="col" :class="{active:S.tab==='timeline'}">
+    <!-- 今日计划 -->
+    <section class="col col-today" :class="{active:S.tab==='today'}">
       <div class="col-head">
-        <span class="col-title">时间轴</span>
-        <span class="count" :class="{'is-zero':!G.counts.timeline}">{{ G.counts.timeline }}</span>
-        <span class="col-sub" v-if="G.timeline.length">{{ G.todayLabel }}</span>
+        <span class="col-title">今日计划</span>
+        <span class="count" :class="{'is-zero':!G.counts.today}">{{ G.counts.today }}</span>
+        <span class="col-sub">{{ G.todayLabel }}</span>
       </div>
 
       <div class="today-panel" v-if="!S.search">
         <div class="tp-top">
-          <span class="tp-badge">今日计划</span>
-          <span class="tp-date">{{ G.todayLabel }}</span>
+          <span class="tp-badge">完成进度</span>
           <span class="tp-count"><b>{{ G.todayStats.done }}</b>/{{ G.todayStats.total }}</span>
         </div>
         <div class="tp-bar"><i :style="{width:G.todayPct+'%'}"></i></div>
@@ -810,9 +851,44 @@ img{display:block;max-width:100%}
         </div>
       </div>
 
-      <div v-if="!G.timeline.length" class="empty">
+      <div class="fz-group" v-if="G.todayList.length">
+        <div class="fz-head">
+          <span class="fz-ic">🎯</span>
+          <h3>今天</h3>
+          <span class="count">{{ G.todayList.length }}</span>
+        </div>
+        <transition-group name="list" tag="div" class="task-list">
+          <task-card v-for="t in G.todayList" :key="t.id" :task="t"/>
+        </transition-group>
+      </div>
+
+      <div class="fz-group" v-if="G.overdue.length">
+        <div class="fz-head is-warn">
+          <span class="fz-ic">⚠️</span>
+          <h3>逾期未清</h3>
+          <span class="count">{{ G.overdue.length }}</span>
+        </div>
+        <transition-group name="list" tag="div" class="task-list">
+          <task-card v-for="t in G.overdue" :key="t.id" :task="t"/>
+        </transition-group>
+      </div>
+
+      <div class="today-empty" v-if="!G.todayList.length && !G.overdue.length">
+        {{ S.search ? '没有匹配的今日事项' : '今天还没有安排，上面的输入框可以直接加一条。' }}
+      </div>
+    </section>
+
+    <!-- 主时间轴：明天及以后 -->
+    <section class="col" :class="{active:S.tab==='timeline'}">
+      <div class="col-head">
+        <span class="col-title">时间轴</span>
+        <span class="count" :class="{'is-zero':!G.counts.timeline}">{{ G.counts.timeline }}</span>
+        <span class="col-sub" v-if="G.counts.timeline">明天起</span>
+      </div>
+
+      <div v-if="!G.timelineFuture.length" class="empty">
         <div class="empty-ic">🗓️</div>
-        <div class="empty-title">{{ S.search ? '没有匹配的时间轴事项' : '时间轴还很空' }}</div>
+        <div class="empty-title">{{ S.search ? '没有匹配的时间轴事项' : (G.counts.today ? '明天起暂时没有安排' : '时间轴还很空') }}</div>
         <div class="empty-sub" v-if="!S.search">试试这样记：<br>“明天下午3点 交周报 // 记得附上链接”</div>
         <div class="sample-chips" v-if="!S.search">
           <button class="chip" @click="A.fillDraft('明天下午3点 交周报')">明天下午3点 交周报</button>
@@ -820,7 +896,7 @@ img{display:block;max-width:100%}
         </div>
       </div>
 
-      <div v-for="g in G.timeline" :key="g.key" class="daygroup" :class="'dg-'+g.kind">
+      <div v-for="g in G.timelineFuture" :key="g.key" class="daygroup" :class="'dg-'+g.kind">
         <div class="day-head">
           <span class="day-tile">{{ g.icon }}</span>
           <span class="day-txt">
@@ -838,7 +914,7 @@ img{display:block;max-width:100%}
     <!-- 近期规划 -->
     <section class="col" :class="{active:S.tab==='plan'}">
       <div class="col-head">
-        <span class="col-title">近期规划</span>
+        <span class="col-title">大致规划</span>
         <span class="count" :class="{'is-zero':!G.counts.fuzzy}">{{ G.counts.fuzzy }}</span>
       </div>
 
@@ -866,7 +942,7 @@ img{display:block;max-width:100%}
     <!-- 琐事箱 -->
     <section class="col" :class="{active:S.tab==='inbox'}">
       <div class="col-head">
-        <span class="col-title">琐事收集箱</span>
+        <span class="col-title">琐事箱</span>
         <span class="count" :class="{'is-zero':!G.counts.inbox}">{{ G.counts.inbox }}</span>
       </div>
 
@@ -995,9 +1071,30 @@ img{display:block;max-width:100%}
           <div class="divider"></div>
 
           <div class="sect">
+            <div class="sect-h"><icon name="sun" :size="12"/> 每日简报
+              <span class="hint">每天一次</span>
+            </div>
+            <label class="chk">
+              <input type="checkbox" v-model="S.prefs.briefOn">
+              <span>当天首次打开时弹出今日简报</span>
+            </label>
+            <div class="field" v-if="S.prefs.briefOn">
+              <label class="label">提醒时间</label>
+              <input class="input" type="time" v-model="S.prefs.briefTime" style="max-width:140px">
+              <div class="help">当天第一次打开页面、且已过该时间才弹出；同一台设备每天最多一次。改时间后需刷新页面生效。</div>
+            </div>
+            <div class="row">
+              <button class="btn btn-sm" @click="A.previewBrief">立即预览</button>
+              <button class="btn btn-sm" @click="A.resetBrief">今天再看一次</button>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.5 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.1 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -1024,6 +1121,38 @@ img{display:block;max-width:100%}
 
         <div class="modal-foot">
           <button class="btn" @click="A.closeSettings">完成</button>
+        </div>
+      </div>
+    </div>
+  </transition>
+
+  <!-- 每日简报 -->
+  <transition name="fade">
+    <div class="mask center" v-if="S.brief.open" @click.self="A.closeBrief('ack')">
+      <div class="modal brief" role="dialog" aria-modal="true" aria-label="每日简报">
+        <div class="brief-hero">
+          <div class="brief-hi">{{ S.brief.greeting }}</div>
+          <div class="brief-date">{{ G.todayLabel }} · 第 {{ G.isoWeek }} 周</div>
+        </div>
+        <div class="brief-stats">
+          <div class="bs"><b>{{ G.todayStats.open }}</b><span>今日待办</span></div>
+          <div class="bs"><b>{{ G.todayStats.done }}</b><span>已完成</span></div>
+          <div class="bs" :class="{warn:G.todayStats.overdue}"><b>{{ G.todayStats.overdue }}</b><span>逾期</span></div>
+          <div class="bs"><b>{{ G.counts.fuzzy }}</b><span>近期规划</span></div>
+        </div>
+        <div class="brief-list" v-if="G.briefItems.length">
+          <div class="bl-row" :class="{done:t.completed}" v-for="t in G.briefItems" :key="t.id">
+            <button class="check" :class="{on:t.completed}" @click.stop="A.toggleTask(t)" :aria-label="t.completed?'标记为未完成':'标记为已完成'">
+              <icon v-if="t.completed" name="check" :size="9" :stroke="3.2"/>
+            </button>
+            <span class="bl-time">{{ t.targetTime || '全天' }}</span>
+            <span class="bl-title">{{ t.title }}</span>
+          </div>
+        </div>
+        <div class="brief-empty" v-else>今天没有排定的事项。想做什么，现在写下来就来得及。</div>
+        <div class="modal-foot brief-foot">
+          <button class="btn" @click="A.snoozeBrief">稍后提醒</button>
+          <button class="btn btn-primary" @click="A.closeBrief('ack')">开始今天</button>
         </div>
       </div>
     </div>
@@ -1074,7 +1203,7 @@ img{display:block;max-width:100%}
      模板：任务卡片
      ============================================================ -->
 <script type="text/x-template" id="tpl-card">
-<div class="task" :class="cardClass" @click="onCardClick">
+<div class="task" :class="cardClass" :data-id="task.id" @click="onCardClick">
   <div class="task-in">
     <button class="check" :class="{on:task.completed}" @click="A.toggleTask(task)"
             :title="task.completed ? '标记为未完成' : '标记为已完成'" :aria-pressed="task.completed">
@@ -1092,7 +1221,7 @@ img{display:block;max-width:100%}
 
         <input v-if="editing" ref="titleInput" class="title-input" v-model="titleDraft"
                @keydown.enter.prevent="commitTitle" @keydown.esc.stop="cancelTitle" @blur="commitTitle">
-        <h3 v-else class="task-title" :class="{done:task.completed}" @click="startEdit">{{ task.title }}</h3>
+        <h3 v-else class="task-title" :class="{done:task.completed}" title="点击展开备注 · 双击重命名">{{ task.title }}</h3>
       </div>
 
       <div class="task-meta" v-if="hasMeta">
@@ -1109,6 +1238,7 @@ img{display:block;max-width:100%}
       <button class="tool" @click="A.toggleExpand(task)" :title="expanded ? '收起备注' : '打开备注'">
         <icon :name="expanded ? 'chevron-down' : 'chevron-right'" :size="13"/>
       </button>
+      <button class="tool" @click="startEdit" title="重命名"><icon name="pencil" :size="12.5"/></button>
       <button class="tool danger" @click="A.removeTask(task)" title="删除"><icon name="trash" :size="12.5"/></button>
     </div>
   </div>
@@ -1689,10 +1819,16 @@ img{display:block;max-width:100%}
         }
         if (mo8 >= 1 && mo8 <= 12 && dd8 >= 1 && dd8 <= 31) {
           var candISO = null;
-          for (var yy8 = now.getFullYear(); yy8 <= now.getFullYear() + 8; yy8++) {
+          var thisYear8 = now.getFullYear();
+          var thisMonth8 = now.getMonth() + 1;
+          for (var yy8 = thisYear8; yy8 <= thisYear8 + 8; yy8++) {
             var candidateISO8 = yy8 + '-' + pad2(mo8) + '-' + pad2(dd8);
             var candidateDate8 = parseISO(candidateISO8);
-            if (candidateDate8 && candidateDate8 >= today) { candISO = candidateISO8; break; }
+            if (!candidateDate8) continue;
+            /* 本月内已经过去的日期就是「过去」：11 月 7 日写「11 月 3 日」记的是四天前，
+               不该顺延成明年。其它月份仍按「最近的将来」推算，避免把远期安排记成历史。 */
+            if (yy8 === thisYear8 && mo8 === thisMonth8 && candidateDate8 < today) { candISO = candidateISO8; break; }
+            if (candidateDate8 >= today) { candISO = candidateISO8; break; }
           }
           if (!candISO) {
             return { timeType: 'nodate', targetDate: null, targetTime: null, fuzzyTag: null,
@@ -2111,6 +2247,8 @@ img{display:block;max-width:100%}
     'link': [['path', { d: 'M10 13a5 5 0 0 0 7.5.6l3-3a5 5 0 0 0-7-7.1l-1.7 1.7' }], ['path', { d: 'M14 11a5 5 0 0 0-7.5-.6l-3 3a5 5 0 0 0 7 7.1l1.7-1.7' }]],
     'arrow-up': [['path', { d: 'M12 19V5M5 12l7-7 7 7' }]],
     'text': [['path', { d: 'M4 6h16M4 12h12M4 18h8' }]],
+    'pencil': [['path', { d: 'M21.2 6.8a1 1 0 0 0-4-4L3.8 16.2a2 2 0 0 0-.5.8l-1.3 4.4a.5.5 0 0 0 .6.6l4.4-1.3a2 2 0 0 0 .8-.5z' }], ['path', { d: 'M15 5l4 4' }]],
+    'sun': [['circle', { cx: '12', cy: '12', r: '4' }], ['path', { d: 'M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4' }]],
     'help': [['circle', { cx: '12', cy: '12', r: '9' }], ['path', { d: 'M9.5 9a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.7M12 17h.01' }]]
   };
 
@@ -2380,12 +2518,24 @@ img{display:block;max-width:100%}
           A.ingestImages(imgs, function (list) { A.addNotes(props.task, list); });
         }
       }
-      /* 点击卡片空白处展开备注（不干扰按钮 / 标题 / 备注区内的交互） */
+      /* 点击整行（含标题）展开备注；双击标题改为重命名，不来回切换两次 */
+      var preClickExpanded = null;
       function onCardClick(e) {
         var t = e.target;
         if (!t || !t.closest) return;
-        if (t.closest('button,a,input,textarea,.task-title,.title-input,.task-notes')) return;
+        if (t.closest('button,a,input,textarea,.title-input,.task-notes')) return;
         if (editing.value) return;
+        var onTitle = !!t.closest('.task-title');
+        /* 双击的第二下：把第一下切换掉的展开状态还给用户，然后进入重命名 */
+        if (e.detail > 1) {
+          if (onTitle && preClickExpanded !== null) {
+            if (preClickExpanded !== expanded.value) A.toggleExpand(props.task);
+            preClickExpanded = null;
+          }
+          if (onTitle) startEdit();
+          return;
+        }
+        preClickExpanded = onTitle ? expanded.value : null;
         A.toggleExpand(props.task);
       }
       return {
@@ -2481,7 +2631,7 @@ img{display:block;max-width:100%}
         storageWarning: '',
         tasks: [],
         search: '',
-        tab: 'timeline',
+        tab: 'today',
         today: isoToday(),
         isoWeek: isoWeekKey(new Date()),
         draft: '',
@@ -2505,6 +2655,8 @@ img{display:block;max-width:100%}
         lightbox: null,
         toast: { show: false, text: '', err: false, actLabel: '', act: null },
         confirm: { open: false, title: '', body: '', okText: '确定', danger: false, onOk: null },
+        brief: { open: false, greeting: '', preview: false },
+        prefs: { briefOn: true, briefTime: '08:00' },
         settings: { deepseekApiKey: '', githubToken: '', gistId: '' }
       });
 
@@ -2520,7 +2672,21 @@ img{display:block;max-width:100%}
           S.settings.deepseekApiKey = localStorage.getItem('deepseekApiKey') || '';
           S.settings.githubToken = localStorage.getItem('githubToken') || '';
           S.settings.gistId = localStorage.getItem('gistId') || '';
+          S.prefs.briefOn = localStorage.getItem('briefEnabled') !== '0';
+          var bt = localStorage.getItem('briefTime') || '08:00';
+          S.prefs.briefTime = isValidTime(bt) ? bt : '08:00';
         } catch (e) { /* 隐私模式下忽略 */ }
+      }
+      /* 简报偏好：布尔量单独存，不走 saveCfg 的“字符串化后写回 settings”通道 */
+      function readPref(k, dft) {
+        try { var v = localStorage.getItem(k); return v === null ? dft : v; } catch (e) { return dft; }
+      }
+      function writePref(k, v) {
+        try { localStorage.setItem(k, String(v)); } catch (e) { /* 隐私模式下忽略 */ }
+      }
+      function savePrefs() {
+        writePref('briefEnabled', S.prefs.briefOn ? '1' : '0');
+        writePref('briefTime', isValidTime(S.prefs.briefTime) ? S.prefs.briefTime : '08:00');
       }
       function saveCfg() {
         try {
@@ -3154,12 +3320,57 @@ img{display:block;max-width:100%}
           .sort(function (a, b) { return b.createdAt - a.createdAt; });
       });
 
+      /* 今日计划栏：今天（含跨天且仍在进行中）单独成列，逾期另起一组 */
+      function endsAtOf(t) {
+        return (t.endDate && t.endDate > t.targetDate) ? t.endDate : t.targetDate;
+      }
+      function isDated(t) {
+        return (t.timeType === 'exact_time' || t.timeType === 'exact_date') && !!t.targetDate;
+      }
+      var todayListG = computed(function () {
+        var out = activeTasks.value.filter(function (t) {
+          if (!isDated(t)) return false;
+          var endsAt = endsAtOf(t);
+          return t.targetDate === S.today || (t.targetDate < S.today && endsAt >= S.today);
+        });
+        return out.sort(function (a, b) {
+          var at = a.timeType === 'exact_time' ? (a.targetTime || '00:00') : '99:99';
+          var bt = b.timeType === 'exact_time' ? (b.targetTime || '00:00') : '99:99';
+          if (at !== bt) return at < bt ? -1 : 1;
+          return a.createdAt - b.createdAt;
+        });
+      });
+      var overdueG = computed(function () {
+        return activeTasks.value.filter(function (t) {
+          if (!isDated(t)) return false;
+          return endsAtOf(t) < S.today;
+        }).sort(function (a, b) {
+          if (a.targetDate !== b.targetDate) return a.targetDate < b.targetDate ? -1 : 1;
+          return a.createdAt - b.createdAt;
+        });
+      });
+      /* 时间轴只放明天及以后：今天/逾期已在今日计划栏，避免同一条在一屏里渲染两遍 */
+      var timelineFutureG = computed(function () {
+        return timelineG.value.filter(function (g) { return g.kind !== 'overdue' && g.kind !== 'today'; });
+      });
+      /* 简报最多列 6 条：先今天，再补逾期 */
+      var briefItemsG = computed(function () {
+        var a = todayListG.value.slice(0, 4);
+        var b = overdueG.value.slice(0, 6 - a.length);
+        return a.concat(b);
+      });
+
       var countsG = computed(function () {
         var timeline = 0;
-        timelineG.value.forEach(function (g) { timeline += g.items.length; });
+        timelineFutureG.value.forEach(function (g) { timeline += g.items.length; });
         var fuzzy = 0;
         Object.keys(fuzzyG.value).forEach(function (k) { fuzzy += fuzzyG.value[k].length; });
-        return { timeline: timeline, fuzzy: fuzzy, inbox: inboxG.value.length };
+        return {
+          today: todayListG.value.length + overdueG.value.length,
+          timeline: timeline,
+          fuzzy: fuzzy,
+          inbox: inboxG.value.length
+        };
       });
 
       var todayStatsG = computed(function () {
@@ -3188,6 +3399,10 @@ img{display:block;max-width:100%}
 
       Object.assign(G, {
         timeline: timelineG,
+        timelineFuture: timelineFutureG,
+        todayList: todayListG,
+        overdue: overdueG,
+        briefItems: briefItemsG,
         fuzzy: fuzzyG,
         fuzzyKeys: fuzzyKeysG,
         inbox: inboxG,
@@ -3706,6 +3921,56 @@ img{display:block;max-width:100%}
         if (t !== S.today) S.today = t;
         var wk = isoWeekKey(new Date());
         if (wk !== S.isoWeek) { S.isoWeek = wk; checkWeek(); }
+        maybeOpenBrief();
+      }
+
+      /* ---------- 每日简报 ---------- */
+      function greetingFor(h) {
+        if (h < 5) return '夜深了';
+        if (h < 11) return '早上好';
+        if (h < 14) return '中午好';
+        if (h < 18) return '下午好';
+        return '晚上好';
+      }
+      function briefWindowPassed() {
+        var t = S.prefs.briefTime || '08:00';
+        var now = new Date();
+        return (pad2(now.getHours()) + ':' + pad2(now.getMinutes())) >= t;
+      }
+      function openBrief(preview) {
+        S.brief.greeting = greetingFor(new Date().getHours());
+        S.brief.preview = !!preview;
+        S.brief.open = true;
+        /* 只有真正弹过才记“今天已看”；预览不占用当天额度 */
+        if (!preview) {
+          writePref('briefLast', isoToday());
+          writePref('briefSnooze', '0');
+        }
+      }
+      function maybeOpenBrief() {
+        if (!S.ready || S.brief.open) return;
+        if (!S.prefs.briefOn) return;
+        if (readPref('briefLast', '') === isoToday()) return;
+        var sn = parseInt(readPref('briefSnooze', '0'), 10) || 0;
+        if (sn > Date.now()) return;
+        /* 稍后提醒到期后直接弹，不再受提醒时间限制 */
+        if (!sn && !briefWindowPassed()) return;
+        openBrief(false);
+      }
+      function closeBrief() { S.brief.open = false; }
+      function snoozeBrief() {
+        S.brief.open = false;
+        writePref('briefSnooze', Date.now() + 30 * 60000);
+        toast('30 分钟后再提醒');
+      }
+      function previewBrief() {
+        S.settingsOpen = false;
+        openBrief(true);
+      }
+      function resetBrief() {
+        writePref('briefLast', '');
+        writePref('briefSnooze', '0');
+        toast('已重置，今天会再弹一次');
       }
 
       onMounted(function () {
@@ -3733,6 +3998,8 @@ img{display:block;max-width:100%}
           checkWeek();
           refreshPwa();
           setTimeout(refreshPwa, 2500);
+          /* 首屏先让用户看到列表，再弹简报 */
+          setTimeout(maybeOpenBrief, 700);
           setTimeout(function () {
             checkUpdate(true).then(function (s) { if (s === 'new') offerUpdate(); });
           }, 4000);
@@ -3761,6 +4028,7 @@ img{display:block;max-width:100%}
         watch(function () { return S.settings.deepseekApiKey; }, saveCfg);
         watch(function () { return S.settings.githubToken; }, saveCfg);
         watch(function () { return S.settings.gistId; }, saveCfg);
+        watch(function () { return [S.prefs.briefOn, S.prefs.briefTime]; }, savePrefs);
         watch(function () { return G.pending; }, function (n) {
           document.title = (n ? '(' + n + ') ' : '') + 'ChronoNote';
         }, { immediate: true });
@@ -3789,6 +4057,7 @@ img{display:block;max-width:100%}
         document.addEventListener('keydown', function (e) {
           if (e.key !== 'Escape') return;
           if (S.lightbox) { closeLightbox(); return; }
+          if (S.brief.open) { closeBrief(); return; }
           if (S.confirm.open) { closeConfirm(); return; }
           if (S.picker.open) { closePicker(); return; }
           if (S.settingsOpen) { closeSettings(); return; }
@@ -3850,6 +4119,10 @@ img{display:block;max-width:100%}
         dismissBanner: dismissBanner,
         openSettings: openSettings,
         closeSettings: closeSettings,
+        closeBrief: closeBrief,
+        snoozeBrief: snoozeBrief,
+        previewBrief: previewBrief,
+        resetBrief: resetBrief,
         askConfirm: askConfirm,
         closeConfirm: closeConfirm,
         confirmOk: confirmOk
@@ -3899,7 +4172,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.6.2', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.1', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
