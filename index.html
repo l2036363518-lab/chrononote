@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.7.3
+  ChronoNote · 智能时间流记事与待办 v1.7.4
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
@@ -561,6 +561,7 @@ img{display:block;max-width:100%}
 .done-item{display:flex;align-items:center;gap:8px;padding:4px 2px;min-width:0}
 .done-item .d-title{font-size:12.5px;color:var(--faint);text-decoration:line-through;text-decoration-color:#C9D3DE;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
 .done-item .d-date{font-family:var(--mono);font-size:10.5px;color:#B6C1CE;margin-left:auto;flex:0 0 auto}
+.done-item .d-hit{font-size:11px;color:var(--muted);background:#F3F6FA;border-radius:5px;padding:0 6px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}
 .done-item .restore{font-size:10.5px;color:var(--faint);padding:1px 5px;border-radius:4px;flex:0 0 auto}
 .done-item .restore:hover{background:#EEF2F7;color:var(--indigo)}
 .restore-check{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;flex:0 0 auto;background:#fff;color:var(--indigo)}
@@ -847,9 +848,9 @@ img{display:block;max-width:100%}
           <span v-else class="tp-ok">无逾期</span>
         </div>
         <div class="tp-add">
-          <input v-model="S.todayDraft" @keydown.enter="A.addToday" @paste="A.onPasteToday"
-                 placeholder="加到今天（支持 // 备注，可粘贴图片）" aria-label="添加到今天">
-          <button @click="A.addToday" :disabled="!S.todayDraft.trim() && !S.todayImages.length" aria-label="添加">
+          <input v-model="S.todayDraft" @keydown.enter="A.addToday" @paste="A.onPasteToday" :disabled="!S.ready"
+                 :placeholder="S.ready ? '加到今天（支持 // 备注，可粘贴图片）' : '正在读取本地数据…'" aria-label="添加到今天">
+          <button @click="A.addToday" :disabled="!S.ready || (!S.todayDraft.trim() && !S.todayImages.length)" aria-label="添加">
             <icon name="plus" :size="12" :stroke="2.6"/>
           </button>
         </div>
@@ -982,6 +983,7 @@ img{display:block;max-width:100%}
           <div class="done-item" v-for="t in G.done" :key="t.id">
             <button class="restore-check" @click="A.toggleTask(t)" title="恢复"><icon name="check" :size="9" :stroke="3"/></button>
             <span class="d-title">{{ t.title }}</span>
+            <span class="d-hit" v-if="A.hitOf(t)" :title="A.hitOf(t)">{{ A.hitOf(t) }}</span>
             <span class="d-date">{{ A.shortDone(t) }}</span>
             <button class="restore" @click="A.restoreTask(t)">恢复</button>
             <button class="restore" @click="A.removeTask(t, true)">删除</button>
@@ -1104,7 +1106,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.7.3 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.4 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -1379,19 +1381,19 @@ img{display:block;max-width:100%}
   </div>
 
   <div class="c-box">
-    <textarea ref="ta" class="c-ta" v-model="S.draft" rows="1"
-              :placeholder="variant==='dock' ? '记点什么…' : '记点什么？例如：明天下午3点 交周报 // 附合同'"
+    <textarea ref="ta" class="c-ta" v-model="S.draft" rows="1" :disabled="!S.ready"
+              :placeholder="!S.ready ? '正在读取本地数据…' : (variant==='dock' ? '记点什么…' : '记点什么？例如：明天下午3点 交周报 // 附合同')"
               @input="autoGrow" @keydown="onKeydown" @paste="onPaste" @compositionstart="composing=true" @compositionend="composing=false"></textarea>
     <div class="c-actions">
-      <button class="icon-btn" @click="fileEl.click()" title="添加图片">
+      <button class="icon-btn" @click="fileEl.click()" title="添加图片" :disabled="!S.ready">
         <icon name="camera" :size="16"/>
       </button>
       <input ref="fileEl" type="file" accept="image/*" multiple hidden @change="onFiles">
-      <button class="ai-btn" :disabled="S.aiLoading" @click="A.runAI" title="用 DeepSeek 拆分多件事情">
+      <button class="ai-btn" :disabled="S.aiLoading || !S.ready" @click="A.runAI" title="用 DeepSeek 拆分多件事情">
         <icon name="sparkles" :size="13" :class="{'spin':S.aiLoading}"/>
         <span v-if="variant==='desktop'">{{ S.aiLoading ? '解析中…' : 'AI 拆解' }}</span>
       </button>
-      <button class="send-btn" :disabled="!canSend" @click="A.send" :title="'发送（回车）'">
+      <button class="send-btn" :disabled="!canSend || !S.ready" @click="A.send" :title="'发送（回车）'">
         <icon name="arrow-up" :size="15" :stroke="2.4"/>
       </button>
     </div>
@@ -2387,6 +2389,26 @@ img{display:block;max-width:100%}
   /* ==========================================================================
    * 7. 任务卡片组件
    * ======================================================================== */
+  /* 搜索命中备注时的摘录（卡片与已完成抽屉共用）。图片备注的 content 是 Base64，跳过 */
+  function noteExcerpt(task, q) {
+    if (!task || !q) return '';
+    if (String(task.title).toLowerCase().indexOf(q) >= 0) return '';
+    var notes = task.notes || [];
+    for (var i = 0; i < notes.length; i++) {
+      var n = notes[i];
+      if (n.type === 'image') continue;
+      var c = String(n.content || '');
+      var hay = (c + ' ' + (n.title || '')).toLowerCase();
+      if (hay.indexOf(q) < 0) continue;
+      var idx = c.toLowerCase().indexOf(q);
+      var from = idx > 8 ? idx - 8 : 0;
+      var pre = from > 0 ? '…' : '';
+      var icon = n.type === 'link' ? '🔗 ' : '📝 ';
+      return icon + pre + c.slice(from, from + 36);
+    }
+    return '';
+  }
+
   var TaskCard = {
     name: 'TaskCard',
     props: { task: { type: Object, required: true } },
@@ -2451,23 +2473,7 @@ img{display:block;max-width:100%}
       var metaText = computed(function () { return A.metaHint(props.task); });
       /* 搜索词只命中备注时，给一行摘录，否则用户看不出为什么这条被搜出来 */
       var noteHit = computed(function () {
-        var q = String(S.search || '').trim().toLowerCase();
-        if (!q) return '';
-        var t = props.task;
-        if (String(t.title).toLowerCase().indexOf(q) >= 0) return '';
-        for (var i = 0; i < t.notes.length; i++) {
-          var n = t.notes[i];
-          if (n.type === 'image') continue;
-          var c = String(n.content || '');
-          var hay = (c + ' ' + (n.title || '')).toLowerCase();
-          if (hay.indexOf(q) < 0) continue;
-          var idx = c.toLowerCase().indexOf(q);
-          var from = idx > 8 ? idx - 8 : 0;
-          var pre = from > 0 ? '…' : '';
-          var icon = n.type === 'link' ? '🔗 ' : (n.type === 'image' ? '🖼️ ' : '📝 ');
-          return icon + pre + c.slice(from, from + 36);
-        }
-        return '';
+        return noteExcerpt(props.task, String(S.search || '').trim().toLowerCase());
       });
       var hasMeta = computed(function () {
         return !!(counts.value.text || counts.value.link || counts.value.image || isOverdue.value || metaText.value || noteHit.value);
@@ -2760,6 +2766,12 @@ img{display:block;max-width:100%}
         S.toast.show = false;
         if (typeof fn === 'function') fn();
       }
+      /* 本地库读完之前不许产生新数据：装载完成时会整体赋值 S.tasks，期间新增/导入的会被冲掉 */
+      function ensureReady() {
+        if (S.ready) return true;
+        toast('正在读取本地数据，请稍候一瞬');
+        return false;
+      }
       function askConfirm(opts) {
         S.confirm = {
           open: true,
@@ -3005,6 +3017,7 @@ img{display:block;max-width:100%}
         });
       }
       function send() {
+        if (!ensureReady()) return;
         var raw = String(S.draft || '');
         if (!raw.trim() && !S.draftImages.length) return;
         var parsed = G.parsed;
@@ -3029,6 +3042,7 @@ img{display:block;max-width:100%}
       }
       /* 今日计划面板的快速添加：无时间的落到今天全天，其余尊重识别结果 */
       function addToday() {
+        if (!ensureReady()) return;
         var raw = String(S.todayDraft || '').trim();
         if (!raw && !S.todayImages.length) return;
         var parsed = parseDraft(raw);
@@ -3162,6 +3176,7 @@ img{display:block;max-width:100%}
       }
 
       function runAI() {
+        if (!ensureReady()) return;
         if (S.aiLoading) return;
         var text = String(S.draft || '').trim();
         if (!text) { toast('先写点什么，再让 AI 拆解', true); return; }
@@ -3425,8 +3440,11 @@ img{display:block;max-width:100%}
           /* 今天：今天开始，或跨天任务仍在进行中 */
           var isToday = t.targetDate === S.today || (t.targetDate < S.today && endsAt >= S.today);
           if (isToday) {
-            /* 有完成时间且不是今天完成的，是早先做完的老事，不算“今天的完成” */
-            if (t.completed && t.completedAt && ymd(new Date(t.completedAt)) !== S.today) return;
+            /* 老数据没有 completedAt：用 updatedAt 当完成时刻的近似（勾完成必然会 touchTask） */
+            if (t.completed) {
+              var doneAt = t.completedAt || t.updatedAt;
+              if (doneAt && ymd(new Date(doneAt)) !== S.today) return;
+            }
             total++;
             if (t.completed) done++; else open++;
           }
@@ -3688,6 +3706,10 @@ img{display:block;max-width:100%}
           return ghFetch(gistPath).then(function (cur) {
             if (cur && cur.updated_at && pullStamp && cur.updated_at !== pullStamp) {
               return readGistPayload(cur, token).then(function (newer) {
+                /* 第二次读到的内容同样要过 schema 闸门：两次读取之间别的设备可能已经升级并写入新格式 */
+                if (newer && newer.schema > SCHEMA_VERSION) {
+                  throw new Error('云端数据由更新版本写入（schema ' + newer.schema + '），为避免覆盖已停止同步，请先把本端升级到最新版');
+                }
                 var merged2 = mergeTasks(S.tasks.slice(), newer.tasks);
                 suppressAutoSync = true;
                 S.tasks = merged2;
@@ -3769,6 +3791,7 @@ img{display:block;max-width:100%}
         var file = e && e.target && e.target.files && e.target.files[0];
         if (e && e.target) e.target.value = '';
         if (!file) return;
+        if (!ensureReady()) return;
         var reader = new FileReader();
         reader.onload = function () {
           try {
@@ -3792,6 +3815,7 @@ img{display:block;max-width:100%}
       }
 
       function wipeAll() {
+        if (!ensureReady()) return;
         askConfirm({
           title: '清空全部数据？',
           body: '会把本机所有事项标记为已删除并推送到云端，其他设备同步后同样清空；图片备注一并移除。墓碑（删除标记）会保留，否则下次合并会把旧事项从 Gist 拉回来。此操作不可撤销。',
@@ -3963,7 +3987,23 @@ img{display:block;max-width:100%}
         var now = Date.now();
         if (!force && now - lastUpdateCheck < 5 * 60000) return Promise.resolve('skipped');
         lastUpdateCheck = now;
-        return fetch(location.href, { method: 'HEAD', cache: 'no-store' })
+
+        /* 第一条线索：让浏览器自己比对 sw.js 的字节。不依赖 Last-Modified，
+           存在新 worker 就一定说明部署过新版本 */
+        var swCheck = Promise.resolve('unknown');
+        try {
+          if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+            swCheck = navigator.serviceWorker.getRegistration().then(function (reg) {
+              if (!reg || !reg.update) return 'unknown';
+              return reg.update().then(function () {
+                return (reg.installing || reg.waiting) ? 'new' : 'same';
+              }).catch(function () { return 'unknown'; });
+            }).catch(function () { return 'unknown'; });
+          }
+        } catch (e) { swCheck = Promise.resolve('unknown'); }
+
+        /* 第二条线索：Last-Modified 与文档时间比对（静态托管走这条） */
+        var lmCheck = fetch(location.href, { method: 'HEAD', cache: 'no-store' })
           .then(function (r) { return r.headers.get('last-modified'); })
           .then(function (lm) {
             if (!lm) return 'unknown';
@@ -3973,6 +4013,12 @@ img{display:block;max-width:100%}
             return Math.abs(remote - local) > 3000 ? 'new' : 'same';
           })
           .catch(function () { return 'unknown'; });
+
+        return Promise.all([swCheck, lmCheck]).then(function (r) {
+          if (r[0] === 'new' || r[1] === 'new') return 'new';
+          if (r[1] === 'same') return 'same';      /* 服务器头可用时以它为准 */
+          return 'unknown';                         /* 头缺失且 SW 没报新版：不谎称「已是最新」 */
+        });
       }
 
       var tickTimer = null;
@@ -4047,7 +4093,10 @@ img{display:block;max-width:100%}
             var invalidCount = normalized.filter(function (t) { return !t; }).length;
             /* 装载本地数据不是“用户改动”：否则会再排一次 8 秒后的自动同步，和启动那次重复 */
             suppressAutoSync = true;
+            /* 读库期间若仍有写入路径漏进来，先保住内存里新增的，再合并（正常情况 pending 为空） */
+            var pending = S.tasks.slice();
             S.tasks = normalized.filter(Boolean);
+            if (pending.length) S.tasks = mergeTasks(S.tasks, pending);
             nextTick(function () { suppressAutoSync = false; });
             if (invalidCount) {
               S.storageWarning = '本地数据库有 ' + invalidCount + ' 条无法识别的记录；为避免覆盖原始数据，已暂停自动保存与云同步。请先保留浏览器数据并检查备份。';
@@ -4159,6 +4208,7 @@ img{display:block;max-width:100%}
         runAI: runAI,
         metaHint: metaHint,
         shortDone: shortDone,
+        hitOf: function (t) { return noteExcerpt(t, String(S.search || '').trim().toLowerCase()); },
         hostOf: hostOf,
         toast: toast,
         runToastAction: runToastAction,
@@ -4238,7 +4288,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.7.3', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.4', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
