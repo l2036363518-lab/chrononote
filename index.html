@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.7.4
+  ChronoNote · 智能时间流记事与待办 v1.7.5
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
@@ -1106,7 +1106,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.7.4 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.5 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -2106,7 +2106,11 @@ img{display:block;max-width:100%}
       endTime: endTime,
       fuzzyTag: fuzzyTag,
       completed: !!raw.completed,
-      completedAt: raw.completed && Number(raw.completedAt) ? Number(raw.completedAt) : null,
+      /* 一次性迁移：老数据没有完成时间，用 updatedAt 作近似并**固化**下来；
+         之后再编辑备注只会动 updatedAt，不会把这条算成「今天完成」 */
+      completedAt: raw.completed
+        ? (Number(raw.completedAt) || Number(raw.updatedAt) || Number(raw.createdAt) || null)
+        : null,
       deleted: !!raw.deleted,
       createdAt: Number(raw.createdAt) || now,
       updatedAt: Number(raw.updatedAt) || Number(raw.createdAt) || now,
@@ -2401,9 +2405,14 @@ img{display:block;max-width:100%}
       var hay = (c + ' ' + (n.title || '')).toLowerCase();
       if (hay.indexOf(q) < 0) continue;
       var idx = c.toLowerCase().indexOf(q);
+      var icon = n.type === 'link' ? '🔗 ' : '📝 ';
+      if (idx < 0) {
+        /* 命中在链接标题上：显示标题，而不是从 URL 开头硬截一段（那里没有关键词） */
+        var ttl = String(n.title || '').trim();
+        return icon + (ttl ? '『' + ttl.slice(0, 36) + '』' : c.slice(0, 36));
+      }
       var from = idx > 8 ? idx - 8 : 0;
       var pre = from > 0 ? '…' : '';
-      var icon = n.type === 'link' ? '🔗 ' : '📝 ';
       return icon + pre + c.slice(from, from + 36);
     }
     return '';
@@ -2724,6 +2733,7 @@ img{display:block;max-width:100%}
       /* 同步自己写回 S.tasks 时，不能被"本地变更"监听当成用户编辑而再次触发同步 */
       var suppressAutoSync = false;
       var dirtySinceSync = false;
+      var localChangeSeq = 0;   /* 本地改动序号：同步前后比对，判断这次同步是否漏掉了新改动 */
       function persistNow() {
         /* 本地库还没读完就落盘 = 拿空数组覆盖用户数据（pagehide / 切后台都会走到这里）。
            getItem 是异步的，首屏这段时间必须什么都不写。 */
@@ -3440,11 +3450,8 @@ img{display:block;max-width:100%}
           /* 今天：今天开始，或跨天任务仍在进行中 */
           var isToday = t.targetDate === S.today || (t.targetDate < S.today && endsAt >= S.today);
           if (isToday) {
-            /* 老数据没有 completedAt：用 updatedAt 当完成时刻的近似（勾完成必然会 touchTask） */
-            if (t.completed) {
-              var doneAt = t.completedAt || t.updatedAt;
-              if (doneAt && ymd(new Date(doneAt)) !== S.today) return;
-            }
+            /* 完成时刻已在 normalizeTask 里固化（老数据用 updatedAt 迁移），之后编辑不再漂移 */
+            if (t.completed && t.completedAt && ymd(new Date(t.completedAt)) !== S.today) return;
             total++;
             if (t.completed) done++; else open++;
           }
@@ -3557,13 +3564,16 @@ img{display:block;max-width:100%}
 
       function parseRemotePayload(data) {
         var tasks = parseRemoteTasks(data);
+        var rawLen = Array.isArray(data) ? data.length
+          : (data && Array.isArray(data.tasks) ? data.tasks.length : tasks.length);
         var devices = {};
         var schema = 1;
         if (data && typeof data === 'object' && !Array.isArray(data)) {
           if (data.devices && typeof data.devices === 'object') devices = data.devices;
           schema = Number(data.schema) || 1;
         }
-        return { tasks: tasks, devices: devices, schema: schema };
+        /* 云端有规范化不了的记录：数量要带出去，同步时只拉取不推送，别把它们从 Gist 抹掉 */
+        return { tasks: tasks, devices: devices, schema: schema, invalid: Math.max(0, rawLen - tasks.length) };
       }
 
       /**
@@ -3631,6 +3641,11 @@ img{display:block;max-width:100%}
       }
 
       function doSync(silent) {
+        /* 本地库还没读完就同步 = 拿空数组去合并，再把结果写回本地库，会盖掉尚未载入的记录 */
+        if (!S.ready) {
+          if (!silent) toast('正在读取本地数据，请稍候一瞬再同步');
+          return Promise.resolve();
+        }
         if (S.storageWarning && /读取本地数据库失败|持久化存储组件不可用|本地保存失败|序列化失败|无法识别的记录|数据库格式无法识别/.test(S.storageWarning)) {
           if (!silent) toast('本地数据状态异常，已暂停云同步以防覆盖数据。请先导出备份并修复本地存储。', true);
           return Promise.resolve();
@@ -3646,6 +3661,8 @@ img{display:block;max-width:100%}
         var gid = String(S.settings.gistId || '').trim();
         var remoteTasks = null;
         var pullStamp = '';   /* 拉取时 Gist 的 updated_at，用于 PATCH 前检测并发写入 */
+        var remoteInvalid = 0; /* 云端规范化不了的记录数：>0 时只拉取不推送 */
+        var seqAtStart = localChangeSeq;   /* 同步期间用户又改了东西就别谎称“已同步” */
 
         var gistPath = '/gists/' + encodeURIComponent(gid);
         var pull = gid
@@ -3658,6 +3675,7 @@ img{display:block;max-width:100%}
           if (p && p.schema > SCHEMA_VERSION) {
             throw new Error('云端数据由更新版本写入（schema ' + p.schema + '），为避免覆盖已停止同步，请先把本端升级到最新版');
           }
+          if (p && p.invalid) remoteInvalid = p.invalid;
           return p;
         });
 
@@ -3685,6 +3703,8 @@ img{display:block;max-width:100%}
 
           return db.setItem(DB_KEY, JSON.parse(JSON.stringify(S.tasks)));
         }).then(function () {
+          /* 云端有坏记录：本次只拉取，绝不回写（否则坏记录会被永久抹掉） */
+          if (remoteInvalid) return;
           var content = JSON.stringify(syncPayload(S.tasks), null, 2);
           if (!gid) {
             return ghFetch('/gists', {
@@ -3710,6 +3730,7 @@ img{display:block;max-width:100%}
                 if (newer && newer.schema > SCHEMA_VERSION) {
                   throw new Error('云端数据由更新版本写入（schema ' + newer.schema + '），为避免覆盖已停止同步，请先把本端升级到最新版');
                 }
+                if (newer && newer.invalid) { remoteInvalid = newer.invalid; return; }
                 var merged2 = mergeTasks(S.tasks.slice(), newer.tasks);
                 suppressAutoSync = true;
                 S.tasks = merged2;
@@ -3734,8 +3755,18 @@ img{display:block;max-width:100%}
           });
         }).then(function () {
           S.syncing = false;
-          S.sync = { state: 'ok', at: Date.now(), message: '已同步 ' + hhmm(Date.now()) };
-          dirtySinceSync = false;
+          if (remoteInvalid) {
+            S.sync = { state: 'ok', at: Date.now(), message: '云端有 ' + remoteInvalid + ' 条无法识别的记录：本次只拉取、未推送' };
+            toast('云端有 ' + remoteInvalid + ' 条无法识别的记录；本次只拉取不推送，避免把它们从 Gist 抹掉', true);
+            return;
+          }
+          /* 同步期间用户又改了东西：云端没包含最新改动，不能说“已同步” */
+          var stillDirty = localChangeSeq !== seqAtStart;
+          if (!stillDirty) dirtySinceSync = false;
+          S.sync = {
+            state: 'ok', at: Date.now(),
+            message: stillDirty ? '已同步，还有新改动待推送' : '已同步 ' + hhmm(Date.now())
+          };
           if (!silent) toast('同步完成 · ' + S.tasks.filter(function (t) { return !t.deleted; }).length + ' 条记录');
         }).catch(function (err) {
           S.syncing = false;
@@ -3763,6 +3794,7 @@ img{display:block;max-width:100%}
       }
 
       function syncClick() {
+        if (!ensureReady()) return;
         if (!String(S.settings.githubToken || '').trim()) {
           S.settingsOpen = true;
           toast('先配置 GitHub Token 与 Gist，即可进行跨端同步', true);
@@ -3773,6 +3805,7 @@ img{display:block;max-width:100%}
 
       /* ---------- 导入导出 ---------- */
       function exportJson() {
+        if (!ensureReady()) return;
         var payload = syncPayload(S.tasks);
         payload.exportedAt = new Date().toISOString();
         var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -4137,6 +4170,7 @@ img{display:block;max-width:100%}
         watch(function () { return S.tasks; }, function () {
           scheduleSave();
           if (suppressAutoSync) return;
+          localChangeSeq++;
           dirtySinceSync = true;
           scheduleAutoSync();
         }, { deep: true });
@@ -4288,7 +4322,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.7.4', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.5', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
