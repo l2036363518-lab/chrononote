@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  ChronoNote · 智能时间流记事与待办 v1.7.7
+  ChronoNote · 智能时间流记事与待办 v1.7.8
   ────────────────────────────────────────────────────────────────
   · 单文件应用：双击即可运行（首屏需联网加载 Vue 3 / Tailwind / Lucide / LocalForage CDN）
   · 存储：任务与图片 → IndexedDB (localforage)；deepseekApiKey / githubToken / gistId / lastIsoWeek / brief* / chrononoteDeviceId 存 localStorage
@@ -1106,7 +1106,7 @@ img{display:block;max-width:100%}
           <div class="sect">
             <div class="sect-h"><icon name="clock" :size="12"/> 关于</div>
             <div class="help" style="margin-top:0">
-              ChronoNote v1.7.7 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
+              ChronoNote v1.7.8 · 单文件离线优先应用 · 本周 <span class="kbd">{{ G.isoWeek }}</span><br>
               快捷语法：<span class="kbd"> // </span> 之后的文字会成为子备注；输入框内 <span class="kbd">Ctrl</span>+<span class="kbd">V</span> 可直接粘贴图片。
             </div>
 
@@ -2756,11 +2756,13 @@ img{display:block;max-width:100%}
 
       /* ---------- 持久化 ---------- */
       var saveTimer = null;
+      var savePending = false;   /* 有尚未落盘（防抖等待中）的本地改动 */
       /* 同步自己写回 S.tasks 时，不能被"本地变更"监听当成用户编辑而再次触发同步 */
       var suppressAutoSync = false;
       var dirtySinceSync = false;
       var localChangeSeq = 0;   /* 本地改动序号：同步前后比对，判断这次同步是否漏掉了新改动 */
       var bc = null;            /* 多标签页广播通道（onMounted 里初始化） */
+      var peerSeenAt = 0;       /* 最近一次收到其他标签页广播的时刻 */
       /* 落盘成功后才广播：先广播会让另一个标签页读到的还是旧库 */
       function notifyTabs() {
         if (!bc) return;
@@ -2773,28 +2775,52 @@ img{display:block;max-width:100%}
         if (S.storageWarning && /读取本地数据库失败|无法识别的记录|数据库格式无法识别/.test(S.storageWarning)) {
           return Promise.resolve();
         }
-        try {
-          var plain = JSON.parse(JSON.stringify(S.tasks));
-          return db.setItem(DB_KEY, plain).then(function () {
-            if (dbPersistent && S.storageWarning && /本地保存失败|数据序列化失败/.test(S.storageWarning)) {
-              S.storageWarning = '';
+        clearTimeout(saveTimer);
+        savePending = false;
+        var doWrite = function (list) {
+          try {
+            var plain = JSON.parse(JSON.stringify(list));
+            return db.setItem(DB_KEY, plain).then(function () {
+              if (dbPersistent && S.storageWarning && /本地保存失败|数据序列化失败/.test(S.storageWarning)) {
+                S.storageWarning = '';
+              }
+              notifyTabs();
+            }).catch(function (e) {
+              console.error('[ChronoNote] 写入失败', e);
+              S.storageWarning = '本地保存失败，当前修改可能无法在刷新后保留。请先导出备份，并检查浏览器存储权限。';
+              toast('本地存储写入失败：' + (e && e.message ? e.message : '未知错误'), true);
+            });
+          } catch (e) {
+            console.error('[ChronoNote] 序列化失败', e);
+            S.storageWarning = '数据序列化失败，当前修改尚未确认保存。请导出可用数据并检查控制台错误。';
+            toast('本地数据序列化失败', true);
+            return Promise.resolve();
+          }
+        };
+        /* 另一个标签页刚刚动过库：先读后合并再写，避免拿自己的旧数组把对方的改动盖掉 */
+        if (bc && Date.now() - peerSeenAt < 4000) {
+          return db.getItem(DB_KEY).then(function (cur) {
+            var disk = Array.isArray(cur) ? cur.map(function (t) { return normalizeTask(t); }).filter(Boolean) : [];
+            /* 刚清掉的墓碑不能从“还没写入的旧库”里合并回来（清空后第一次落盘必经这里） */
+            var purged = loadPurgeIds();
+            if (purged.length) disk = disk.filter(function (t) { return !(t.deleted && purged.indexOf(t.id) >= 0); });
+            var merged = disk.length ? mergeTasks(S.tasks.slice(), disk) : S.tasks.slice();
+            if (!sameTasks(merged, S.tasks)) {
+              suppressAutoSync = true;
+              S.tasks = merged;
+              nextTick(function () { suppressAutoSync = false; });
             }
-            notifyTabs();
-          }).catch(function (e) {
-            console.error('[ChronoNote] 写入失败', e);
-            S.storageWarning = '本地保存失败，当前修改可能无法在刷新后保留。请先导出备份，并检查浏览器存储权限。';
-            toast('本地存储写入失败：' + (e && e.message ? e.message : '未知错误'), true);
+            return doWrite(merged);
+          }).catch(function () {
+            return doWrite(S.tasks);
           });
-        } catch (e) {
-          console.error('[ChronoNote] 序列化失败', e);
-          S.storageWarning = '数据序列化失败，当前修改尚未确认保存。请导出可用数据并检查控制台错误。';
-          toast('本地数据序列化失败', true);
-          return Promise.resolve();
         }
+        return doWrite(S.tasks);
       }
       function scheduleSave() {
         clearTimeout(saveTimer);
-        saveTimer = setTimeout(persistNow, 260);
+        savePending = true;
+        saveTimer = setTimeout(function () { persistNow(); }, 260);
       }
 
       /* ---------- Toast / 确认框 ---------- */
@@ -3256,15 +3282,16 @@ img{display:block;max-width:100%}
           }).filter(Boolean);
 
           if (!list.length) throw new Error('没有识别出任何事项');
-          if (S.draftImages.length) {
-            var imgs = S.draftImages.slice();
-            imgs.forEach(function (src) { list[0].notes.push(makeImageNote(src)); });
+          /* 只把“请求发出时”的那批图挂到第一条任务上；请求期间新贴的图属于下一个草稿 */
+          if (imgsAtStart.length) {
+            imgsAtStart.forEach(function (src) { list[0].notes.push(makeImageNote(src)); });
           }
           list.forEach(function (t) { S.tasks.push(t); });
           /* 只清掉发请求时的那份草稿；用户后打的字、后贴的图必须留着 */
           if (S.draft === draftAtStart) { S.draft = ''; S.draftOverride = null; }
-          if (S.draftImages.length === imgsAtStart.length &&
-              S.draftImages.every(function (s, i) { return s === imgsAtStart[i]; })) S.draftImages = [];
+          if (imgsAtStart.length) {
+            S.draftImages = S.draftImages.filter(function (src) { return imgsAtStart.indexOf(src) < 0; });
+          }
           toast('AI 已拆解 ' + list.length + ' 个事项');
           /* 单条结果切到它真正所在的栏：今天/逾期 → today，模糊 → plan，明天起 → timeline */
           if (list.length === 1) {
@@ -3707,6 +3734,18 @@ img{display:block;max-width:100%}
         return Array.from(map.values());
       }
 
+      /* 两条列表是否“内容一致”（比较 id / updatedAt / 删除态）。
+         多标签页用它判断“别人发来的改动其实我已经有了”，避免无意义的赋值 → 保存 → 广播循环 */
+      function sameTasks(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        for (var i = 0; i < a.length; i++) {
+          if (a[i].id !== b[i].id) return false;
+          if ((a[i].updatedAt || 0) !== (b[i].updatedAt || 0)) return false;
+          if (!!a[i].deleted !== !!b[i].deleted) return false;
+        }
+        return true;
+      }
+
       function doSync(silent) {
         /* 本地库还没读完就同步 = 拿空数组去合并，再把结果写回本地库，会盖掉尚未载入的记录 */
         if (!S.ready) {
@@ -3976,7 +4015,10 @@ img{display:block;max-width:100%}
             if (S.syncing) { toast('正在同步中，等这次同步结束再清理', true); return; }
             /* 只滤掉这一次清理掉的 id：别的设备刚删的记录（新墓碑）不受影响 */
             var ids = dead.map(function (t) { return t.id; });
-            savePurgeIds(ids);
+            /* 与上一次“推送失败还挂着”的待补推列表合并，别把旧的那批顶掉 */
+            var prev = loadPurgeIds();
+            ids.forEach(function (id) { if (prev.indexOf(id) < 0) prev.push(id); });
+            savePurgeIds(prev);
             S.tasks = S.tasks.filter(function (t) { return !t.deleted; });
             persistNow();
             toast('已清除 ' + dead.length + ' 条删除标记');
@@ -4260,12 +4302,19 @@ img{display:block;max-width:100%}
           clearTimeout(peerPullTimer);
           peerPullTimer = setTimeout(function () {
             db.getItem(DB_KEY).then(function (cur) {
-              if (!Array.isArray(cur)) return;
-              var disk = cur.map(function (t) { return normalizeTask(t); }).filter(Boolean);
-              if (!disk.length) return;
+              var disk = Array.isArray(cur) ? cur.map(function (t) { return normalizeTask(t); }).filter(Boolean) : null;
+              if (disk === null) return;
+              /* 别的标签页刚清掉的墓碑，本页不能把它再带回去 */
+              var purged = loadPurgeIds();
+              if (purged.length) disk = disk.filter(function (t) { return !(t.deleted && purged.indexOf(t.id) >= 0); });
+              /* 本页有没落盘的改动 → 合并保守处理；没有 → 直接采用磁盘。
+                 这样“物理删除 / 清空”才能真正传播过来（merge 只会并集，删不掉的） */
+              var merged = savePending ? mergeTasks(S.tasks.slice(), disk) : disk;
+              if (sameTasks(merged, S.tasks)) return;
               suppressAutoSync = true;
-              S.tasks = mergeTasks(S.tasks.slice(), disk);
+              S.tasks = merged;
               nextTick(function () { suppressAutoSync = false; });
+              if (savePending) persistNow();   /* 本页有改动：把并集落盘（会再广播一轮，随后两边收敛） */
             }).catch(function () { /* 读失败就算了，别影响当前页 */ });
           }, 120);
         }
@@ -4273,6 +4322,7 @@ img{display:block;max-width:100%}
           bc.onmessage = function (e) {
             var d = e && e.data;
             if (!d) return;
+            peerSeenAt = Date.now();
             if (d.t === 'hello') { try { bc.postMessage({ t: 'changed' }); } catch (err) {} return; }
             if (d.t === 'changed') pullFromDbSoon();
           };
@@ -4436,7 +4486,7 @@ img{display:block;max-width:100%}
   app.component('time-menu', TimeMenu);
   app.mount('#app');
 
-  window.__chrononote = { version: '1.7.7', parseNatural: parseNatural, parseDraft: parseDraft };
+  window.__chrononote = { version: '1.7.8', parseNatural: parseNatural, parseDraft: parseDraft };
 })();
 </script>
 </body>
